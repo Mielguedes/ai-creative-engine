@@ -1,679 +1,526 @@
 import streamlit as st
 import itertools
 import os
+import json
+import subprocess
+import shutil
+import zipfile
 import re
 import random
-import shutil
-import subprocess
-import tempfile
-import zipfile
-from pathlib import Path
-import imageio_ffmpeg
+from faster_whisper import WhisperModel
 
-# ============================================================
-# AI CREATIVE ENGINE
-# Gerador de combinações de vídeos
-# ============================================================
-
-st.set_page_config(
-    page_title="AI Creative Engine",
-    page_icon="🎬",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
-
-# ============================================================
-# ESTILO
-# ============================================================
-
-st.markdown(
-    """
-    <style>
-    .main-title {
-        font-size: 42px;
-        font-weight: 800;
-        margin-bottom: 4px;
-    }
-
-    .subtitle {
-        color: #9ca3af;
-        font-size: 17px;
-        margin-bottom: 28px;
-    }
-
-    .block-title {
-        font-size: 25px;
-        font-weight: 700;
-        margin-top: 18px;
-    }
-
-    .info-box {
-        padding: 16px;
-        border-radius: 12px;
-        background: #17324f;
-        margin: 10px 0 18px 0;
-        font-size: 17px;
-    }
-
-    .success-box {
-        padding: 16px;
-        border-radius: 12px;
-        background: #103d28;
-        margin: 10px 0 18px 0;
-        font-size: 17px;
-    }
-
-    .warning-box {
-        padding: 16px;
-        border-radius: 12px;
-        background: #4a4214;
-        margin: 10px 0 18px 0;
-        font-size: 17px;
-    }
-
-    .small-muted {
-        color: #9ca3af;
-        font-size: 14px;
-    }
-
-    div.stButton > button {
-        width: 100%;
-        min-height: 48px;
-        font-weight: 700;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
-# ============================================================
-# FUNÇÕES AUXILIARES
-# ============================================================
-
-VIDEO_TYPES = ["mp4", "mov", "m4v", "avi", "webm"]
+# --- CONFIGURAÇÃO DA PÁGINA STREAMLIT ---
+st.set_page_config(page_title="AI Creative Engine Local", layout="wide")
 
 
-def safe_name(text):
-    """Transforma texto em nome seguro para arquivo."""
-    text = str(text or "").strip()
-    text = re.sub(r"[^A-Za-z0-9À-ÿ_-]+", "_", text)
-    text = text.strip("_")
-    return text[:80] or "PROJETO"
+# --- LOGIN ---
+def verificar_login():
+    if st.session_state.get("autenticado", False):
+        return True
+
+    st.title("🔐 AI Creative Engine")
+    st.caption("Entre para acessar o gerador de vídeos.")
+
+    usuario = st.text_input("👤 Usuário")
+    senha = st.text_input("🔑 Senha", type="password")
+
+    if st.button("🚀 ENTRAR", type="primary", use_container_width=True):
+        import hmac
+
+        usuario_correto = st.secrets.get("LOGIN_USUARIO", "")
+        senha_correta = st.secrets.get("LOGIN_SENHA", "")
+
+        if (
+            usuario_correto
+            and senha_correta
+            and hmac.compare_digest(usuario, usuario_correto)
+            and hmac.compare_digest(senha, senha_correta)
+        ):
+            st.session_state["autenticado"] = True
+            st.rerun()
+        else:
+            st.error("❌ Usuário ou senha incorretos.")
+
+    return False
 
 
-def get_ffmpeg():
-    return imageio_ffmpeg.get_ffmpeg_exe()
+if not verificar_login():
+    st.stop()
 
+# --- LOGOUT ---
+if st.sidebar.button("🚪 Sair", use_container_width=True):
+    st.session_state["autenticado"] = False
+    st.rerun()
 
-def run_ffmpeg(args):
-    """Executa FFmpeg e retorna stdout/stderr em caso de erro."""
-    ffmpeg = get_ffmpeg()
+# --- ESTRUTURA DE PASTAS E PROJETOS ---
+BASE_DIR = os.path.abspath("projetos")
+os.makedirs(BASE_DIR, exist_ok=True)
 
-    command = [ffmpeg, "-y", "-hide_banner", "-loglevel", "error"] + args
+def listar_projetos():
+    return [d for d in os.listdir(BASE_DIR) if os.path.isdir(os.path.join(BASE_DIR, d))]
 
-    result = subprocess.run(
-        command,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
+# --- SIDEBAR: GERENCIADOR DE PROJETOS ---
+st.sidebar.title("📁 Projetos")
 
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr[-3000:] or "Erro desconhecido do FFmpeg.")
-
-    return result
-
-
-def save_uploaded_file(uploaded_file, folder, prefix):
-    """Salva um arquivo enviado pelo usuário."""
-    original = Path(uploaded_file.name)
-    extension = original.suffix.lower()
-
-    if extension not in [f".{x}" for x in VIDEO_TYPES]:
-        extension = ".mp4"
-
-    filename = safe_name(prefix) + extension
-    destination = Path(folder) / filename
-
-    with open(destination, "wb") as f:
-        f.write(uploaded_file.getbuffer())
-
-    return destination
-
-
-def normalize_video(input_path, output_path):
-    """
-    Normaliza o vídeo para facilitar a combinação.
-    Saída: MP4 H.264, 1080x1920, 30fps, áudio AAC.
-    """
-    vf = (
-        "scale=1080:1920:force_original_aspect_ratio=decrease,"
-        "pad=1080:1920:(ow-iw)/2:(oh-ih)/2,"
-        "setsar=1,fps=30,format=yuv420p"
-    )
-
-    run_ffmpeg(
-        [
-            "-i",
-            str(input_path),
-            "-vf",
-            vf,
-            "-c:v",
-            "libx264",
-            "-preset",
-            "veryfast",
-            "-crf",
-            "23",
-            "-c:a",
-            "aac",
-            "-b:a",
-            "128k",
-            "-ar",
-            "44100",
-            "-ac",
-            "2",
-            "-movflags",
-            "+faststart",
-            str(output_path),
-        ]
-    )
-
-
-def concatenate_videos(video_paths, output_path):
-    """
-    Junta vídeos já normalizados.
-    Usa o demuxer concat do FFmpeg.
-    """
-    list_file = output_path.parent / f"{output_path.stem}_concat.txt"
-
-    with open(list_file, "w", encoding="utf-8") as f:
-        for video in video_paths:
-            safe_path = str(video).replace("\\", "/").replace("'", "'\\''")
-            f.write(f"file '{safe_path}'\n")
-
-    try:
-        run_ffmpeg(
-            [
-                "-f",
-                "concat",
-                "-safe",
-                "0",
-                "-i",
-                str(list_file),
-                "-c",
-                "copy",
-                "-movflags",
-                "+faststart",
-                str(output_path),
-            ]
-        )
-    finally:
-        try:
-            list_file.unlink()
-        except Exception:
-            pass
-
-
-def create_zip(files, zip_path):
-    with zipfile.ZipFile(
-        zip_path,
-        "w",
-        compression=zipfile.ZIP_DEFLATED,
-    ) as z:
-        for file in files:
-            z.write(file, arcname=file.name)
-
-
-def build_combinations(ganchos, corpos, ctas, shuffle=False, limit=None):
-    combinations = list(itertools.product(ganchos, corpos, ctas))
-
-    if shuffle:
-        random.shuffle(combinations)
-
-    if limit and limit > 0:
-        combinations = combinations[:limit]
-
-    return combinations
-
-
-# ============================================================
-# ESTADO DA SESSÃO
-# ============================================================
-
-if "projects" not in st.session_state:
-    st.session_state.projects = [
-        "WOMAN_SHOP",
-        "RODO_CLEAN",
-        "NOVO_PRODUTO",
-    ]
-
-if "generated_files" not in st.session_state:
-    st.session_state.generated_files = []
-
-if "zip_bytes" not in st.session_state:
-    st.session_state.zip_bytes = None
-
-if "last_project" not in st.session_state:
-    st.session_state.last_project = "RODO_CLEAN"
-
-
-# ============================================================
-# SIDEBAR / PROJETOS
-# ============================================================
-
-st.sidebar.header("📁 Projetos")
-
-new_project = st.sidebar.text_input(
-    "Novo projeto",
-    placeholder="Ex.: RODO_CLEAN_02",
-)
-
-if st.sidebar.button("➕ Criar Projeto"):
-    project = safe_name(new_project).upper()
-
-    if project and project not in st.session_state.projects:
-        st.session_state.projects.append(project)
-        st.session_state.last_project = project
-        st.sidebar.success(f"Projeto criado: {project}")
+novo_proj_nome = st.sidebar.text_input("Novo Projeto:")
+if st.sidebar.button("➕ Criar Projeto", use_container_width=True):
+    if novo_proj_nome.strip():
+        nome_limpo = re.sub(r'[^\w\s-]', '', novo_proj_nome.strip()).replace(" ", "_")
+        proj_path = os.path.join(BASE_DIR, nome_limpo)
+        os.makedirs(os.path.join(proj_path, "ganchos"), exist_ok=True)
+        os.makedirs(os.path.join(proj_path, "corpos"), exist_ok=True)
+        os.makedirs(os.path.join(proj_path, "ctas"), exist_ok=True)
+        os.makedirs(os.path.join(proj_path, "output"), exist_ok=True)
+        st.sidebar.success(f"Projeto '{nome_limpo}' criado!")
         st.rerun()
-    elif project in st.session_state.projects:
-        st.sidebar.warning("Esse projeto já existe.")
+
+st.sidebar.divider()
+
+projetos_disponiveis = listar_projetos()
+if not projetos_disponiveis:
+    st.warning("⚠️ Nenhum projeto encontrado. Crie um projeto no menu lateral para começar!")
+    st.stop()
+
+projeto_atual = st.sidebar.selectbox("Selecione o Projeto Ativo:", projetos_disponiveis)
+PROJ_PATH = os.path.join(BASE_DIR, projeto_atual)
+
+PATH_GANCHOS = os.path.join(PROJ_PATH, "ganchos")
+PATH_CORPOS = os.path.join(PROJ_PATH, "corpos")
+PATH_CTAS = os.path.join(PROJ_PATH, "ctas")
+PATH_OUTPUT = os.path.join(PROJ_PATH, "output")
+
+st.sidebar.divider()
+
+if st.sidebar.button("🗑️ Deletar Projeto Atual", type="primary", use_container_width=True):
+    shutil.rmtree(PROJ_PATH)
+    st.sidebar.error(f"Projeto '{projeto_atual}' foi apagado!")
+    st.rerun()
+
+# --- FUNÇÃO: CÁLCULO DE SCORE LOCAL ---
+def calcular_score_local(texto):
+    if not texto.strip(): return 75
+    palavras = len(texto.split())
+    score = 70
+    if 3 <= palavras <= 12: score += 15
+    if bool(re.search(r'\d', texto)): score += 8
+    if '?' in texto or '!' in texto: score += 7
+    return min(98, max(65, score))
+
+# --- FUNÇÃO: GERAR LEGENDA DO HOOK INCLINADO (.ASS NO TOPO) ---
+def gerar_hook_ass(texto_hook, caminho_saida_ass, posicao_y=200, tamanho_fonte=100):
+    borda_padding = max(15, int(tamanho_fonte * 0.25))
+    
+    estilo_ass = f"""[Script Info]
+ScriptType: v4.00+
+PlayResX: 1080
+PlayResY: 1920
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: HookStyle,The Bold Font,{tamanho_fonte},&H00000000,&H00000000,&H00FFFFFF,&H00FFFFFF,-1,0,0,0,100,100,0,0,3,{borda_padding},0,8,30,30,{posicao_y},1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:00.00,0:00:04.50,HookStyle,,0,0,0,,{{\\frz-2.5}}{texto_hook}
+Dialogue: 0,0:00:04.50,0:00:05.00,HookStyle,,0,0,0,,{{\\frz-2.5\\fad(0,500)}}{texto_hook}
+"""
+    with open(caminho_saida_ass, "w", encoding="utf-8") as f:
+        f.write(estilo_ass)
+
+# --- FUNÇÃO: LEGENDA WORD POP / ACTIVE HIGHLIGHT ---
+def gerar_legenda_ass(caminho_video, caminho_saida_ass, posicao_v=450, tamanho_fonte=80):
+    if not os.path.exists(caminho_video):
+        return False
+    try:
+        model = WhisperModel("small", device="cpu", compute_type="int8")
+        segments, _ = model.transcribe(caminho_video, word_timestamps=True, language="pt")
+
+        tamanho_destaque = int(tamanho_fonte * 1.30)
+
+        estilo_ass = f"""[Script Info]
+ScriptType: v4.00+
+PlayResX: 1080
+PlayResY: 1920
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Hormozi,The Bold Font,{tamanho_fonte},&H00FFFFFF,&H0000FFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,2,2,30,30,{posicao_v},1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+"""
+        linhas = []
+        def fmt(s):
+            m, s = divmod(s, 60)
+            h, m = divmod(m, 60)
+            return f"{int(h)}:{int(m):02d}:{s:05.2f}"
+
+        for segment in segments:
+            words = segment.words
+            if not words: continue
+            
+            grupos = []
+            grupo_atual = []
+            tam_atual = 0
+            
+            for w in words:
+                palavra_str = w.word.upper().strip()
+                tam_necessario = tam_atual + (1 if tam_atual > 0 else 0) + len(palavra_str)
+                
+                if grupo_atual and tam_necessario > 18:
+                    grupos.append(grupo_atual)
+                    grupo_atual = [w]
+                    tam_atual = len(palavra_str)
+                else:
+                    grupo_atual.append(w)
+                    tam_atual = tam_necessario
+            if grupo_atual:
+                grupos.append(grupo_atual)
+
+            for grupo in grupos:
+                for i_destaque, w_foco in enumerate(grupo):
+                    start_time = w_foco.start
+                    end_time = w_foco.end
+
+                    texto_linha = []
+                    for j_palavra, w_item in enumerate(grupo):
+                        palavra_txt = w_item.word.upper().strip()
+                        if i_destaque == j_palavra:
+                            texto_linha.append(f"{{\\fs{tamanho_destaque}\\c&H0000FFFF\\b1}}{palavra_txt}{{\\r}}")
+                        else:
+                            texto_linha.append(f"{{\\fs{tamanho_fonte}\\c&H00FFFFFF\\b1}}{palavra_txt}{{\\r}}")
+
+                    frase_formatada = " ".join(texto_linha)
+                    linha = f"Dialogue: 0,{fmt(start_time)},{fmt(end_time)},Hormozi,,0,0,0,,{frase_formatada}\n"
+                    linhas.append(linha)
+
+        with open(caminho_saida_ass, "w", encoding="utf-8") as f:
+            f.writelines([estilo_ass] + linhas)
+        return True
+    except Exception as e:
+        print(f"[ERRO WHISPER]: {e}")
+        return False
+
+# --- FUNÇÃO: PREPARAR/TRATAR VÍDEO INDIVIDUAL DE BLOCO ---
+def processar_bloco_individual(caminho_entrada, caminho_saida, encoder_video="libx264", deve_espelhar=False):
+    filtros = []
+    if deve_espelhar:
+        filtros.append("hflip")
+    
+    if filtros:
+        cmd = f'ffmpeg -y -i "{caminho_entrada}" -vf "{",".join(filtros)}" -c:v {encoder_video} -pix_fmt yuv420p -c:a copy "{caminho_saida}"'
+        subprocess.run(cmd, shell=True)
     else:
-        st.sidebar.warning("Digite um nome para o projeto.")
+        shutil.copyfile(caminho_entrada, caminho_saida)
 
-project = st.sidebar.selectbox(
-    "Projeto ativo",
-    st.session_state.projects,
-    index=(
-        st.session_state.projects.index(st.session_state.last_project)
-        if st.session_state.last_project in st.session_state.projects
-        else 0
-    ),
-)
+def criar_zip_projeto(pasta_output, caminho_zip):
+    with zipfile.ZipFile(caminho_zip, 'w', zipfile.ZIP_DEFLATED) as zipf:
+        for root, _, files in os.walk(pasta_output):
+            for file in files:
+                if file.endswith('.mp4'):
+                    zipf.write(os.path.join(root, file), arcname=file)
 
-st.session_state.last_project = project
+def limpar_pasta(caminho_pasta):
+    for f in os.listdir(caminho_pasta):
+        fp = os.path.join(caminho_pasta, f)
+        if os.path.isfile(fp):
+            os.remove(fp)
 
-st.sidebar.success(f"Projeto ativo: {project}")
+# --- HEADER PRINCIPAL ---
+st.title(f"🎬 AI Creative Engine — {projeto_atual}")
+st.caption("Multiplicador Modular de Vídeos Localhost (Estável & Seguro)")
 
-st.sidebar.markdown("---")
-st.sidebar.markdown(
-    """
-    **AI Creative Engine**
+st.divider()
 
-    Combina:
-    - 🎣 Ganchos
-    - 👤 Corpos
-    - 📣 CTAs
+def salvar_arquivos(files, destino):
+    for f in files:
+        nome_limpo = re.sub(r'[^\w\.-]', '_', f.name)
+        path = os.path.join(destino, nome_limpo)
+        with open(path, "wb") as buffer:
+            buffer.write(f.getbuffer())
 
-    e cria os vídeos automaticamente.
-    """
-)
-
-# ============================================================
-# CABEÇALHO
-# ============================================================
-
-st.markdown(
-    '<div class="main-title">🎬 AI Creative Engine</div>',
-    unsafe_allow_html=True,
-)
-
-st.markdown(
-    '<div class="subtitle">Gerador automático de criativos em vídeo</div>',
-    unsafe_allow_html=True,
-)
-
-# ============================================================
-# 1. GERENCIAMENTO DOS BLOCOS
-# ============================================================
-
-st.markdown(
-    '<div class="block-title">1. Gerenciamento dos Blocos</div>',
-    unsafe_allow_html=True,
-)
-
-st.caption(
-    "Envie vídeos de Gancho, Corpo e CTA. "
-    "O sistema combina todas as possibilidades."
-)
-
+# --- 1. UPLOAD E LIMPEZA DOS BLOCOS DE VÍDEO ---
+st.subheader("1. Gerenciamento dos Blocos de Vídeo")
 col1, col2, col3 = st.columns(3)
 
 with col1:
-    st.subheader("🎣 Ganchos")
-
-    ganchos = st.file_uploader(
-        "Enviar Ganchos",
-        type=VIDEO_TYPES,
-        accept_multiple_files=True,
-        key=f"ganchos_{project}",
-        help="Você pode enviar vários vídeos.",
-    )
-
-    st.success(f"✅ {len(ganchos)} Gancho(s)")
+    st.markdown("### 🪝 Ganchos")
+    files_h = st.file_uploader("Subir Ganchos", accept_multiple_files=True, type=["mp4", "mov"], key="u_h")
+    if files_h: salvar_arquivos(files_h, PATH_GANCHOS)
+    arquivos_h = [f for f in os.listdir(PATH_GANCHOS) if f.endswith(('mp4', 'mov'))]
+    if len(arquivos_h) < 1: st.warning("⚠️ Nenhum vídeo")
+    else: st.success(f"✅ {len(arquivos_h)} Ganchos")
+    for f in arquivos_h: st.code(f, language="text")
+    if arquivos_h and st.button("🗑️ Limpar Ganchos", key="del_h"):
+        limpar_pasta(PATH_GANCHOS)
+        st.rerun()
 
 with col2:
-    st.subheader("👤 Corpos")
-
-    corpos = st.file_uploader(
-        "Enviar Corpos",
-        type=VIDEO_TYPES,
-        accept_multiple_files=True,
-        key=f"corpos_{project}",
-        help="Você pode enviar vários vídeos.",
-    )
-
-    st.success(f"✅ {len(corpos)} Corpo(s)")
+    st.markdown("### 📹 Corpos")
+    files_m = st.file_uploader("Subir Corpos", accept_multiple_files=True, type=["mp4", "mov"], key="u_m")
+    if files_m: salvar_arquivos(files_m, PATH_CORPOS)
+    arquivos_m = [f for f in os.listdir(PATH_CORPOS) if f.endswith(('mp4', 'mov'))]
+    if len(arquivos_m) < 1: st.warning("⚠️ Nenhum vídeo")
+    else: st.success(f"✅ {len(arquivos_m)} Corpos")
+    for f in arquivos_m: st.code(f, language="text")
+    if arquivos_m and st.button("🗑️ Limpar Corpos", key="del_m"):
+        limpar_pasta(PATH_CORPOS)
+        st.rerun()
 
 with col3:
-    st.subheader("📣 CTAs")
+    st.markdown("### 📢 CTAs")
+    files_c = st.file_uploader("Subir CTAs", accept_multiple_files=True, type=["mp4", "mov"], key="u_c")
+    if files_c: salvar_arquivos(files_c, PATH_CTAS)
+    arquivos_c = [f for f in os.listdir(PATH_CTAS) if f.endswith(('mp4', 'mov'))]
+    if len(arquivos_c) < 1: st.warning("⚠️ Nenhum vídeo")
+    else: st.success(f"✅ {len(arquivos_c)} CTAs")
+    for f in arquivos_c: st.code(f, language="text")
+    if arquivos_c and st.button("🗑️ Limpar CTAs", key="del_c"):
+        limpar_pasta(PATH_CTAS)
+        st.rerun()
 
-    ctas = st.file_uploader(
-        "Enviar CTAs",
-        type=VIDEO_TYPES,
-        accept_multiple_files=True,
-        key=f"ctas_{project}",
-        help="Você pode enviar vários vídeos.",
-    )
+total_variacoes = len(arquivos_h) * len(arquivos_m) * len(arquivos_c)
+if total_variacoes > 0:
+    st.info(f"📊 Combinação base: **{len(arquivos_h)}** Gancho(s) × **{len(arquivos_m)}** Corpo(s) × **{len(arquivos_c)}** CTA(s) = **{total_variacoes} Vídeo(s) Resultante(s)**!")
 
-    st.success(f"✅ {len(ctas)} CTA(s)")
+st.divider()
 
+# --- 2. OPÇÕES DE EDIÇÃO EM LINHA ---
+st.subheader("2. Estilização & Modificadores")
 
-# ============================================================
-# OPÇÕES
-# ============================================================
-
-st.markdown("---")
-st.subheader("⚙️ Opções da geração")
-
-opt1, opt2, opt3 = st.columns(3)
-
-with opt1:
-    max_videos = st.number_input(
-        "Quantidade máxima de vídeos",
-        min_value=1,
-        max_value=500,
-        value=100,
-        step=1,
-    )
-
-with opt2:
-    shuffle = st.checkbox(
-        "🔀 Embaralhar combinações",
-        value=False,
-    )
-
-with opt3:
-    filename_prefix = st.text_input(
-        "Nome dos arquivos",
-        value=project,
-        help="Ex.: RODO_CLEAN",
-    )
-
-filename_prefix = safe_name(filename_prefix).upper()
-
-
-# ============================================================
-# COMBINAÇÕES
-# ============================================================
-
-total = len(ganchos) * len(corpos) * len(ctas)
-
-if total > 0:
-    combinations = build_combinations(
-        ganchos,
-        corpos,
-        ctas,
-        shuffle=shuffle,
-        limit=int(max_videos),
-    )
-else:
-    combinations = []
-
-st.markdown("---")
-
-if total == 0:
-    st.info(
-        "🎬 0 Gancho(s) × 0 Corpo(s) × 0 CTA(s) = 0 vídeo(s)"
-    )
-else:
-    st.markdown(
-        f"""
-        <div class="info-box">
-        🎬 <b>{len(ganchos)} Gancho(s)</b> ×
-        <b>{len(corpos)} Corpo(s)</b> ×
-        <b>{len(ctas)} CTA(s)</b>
-        = <b>{total} combinação(ões)</b><br><br>
-        Serão processadas <b>{len(combinations)}</b>
-        combinação(ões), conforme o limite escolhido.
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    if total > max_videos:
-        st.warning(
-            f"⚠️ Existem {total} combinações, mas o limite está em "
-            f"{max_videos}. Serão geradas somente {max_videos}."
-        )
-
-
-# ============================================================
-# 2. GERAÇÃO DOS VÍDEOS
-# ============================================================
-
-st.markdown(
-    '<div class="block-title">2. Geração dos Vídeos</div>',
-    unsafe_allow_html=True,
+# SELEÇÃO DE HARDWARE (GPU / CPU)
+st.markdown("#### ⚡ Aceleração por Hardware")
+tipo_gpu = st.selectbox(
+    "Escolha a Renderização (Se congelar no seu PC, troque para CPU Padrão):",
+    ["CPU Padrão (libx264) - Mais Estável", "NVIDIA (h264_nvenc)", "AMD (h264_amf)", "Intel (h264_qsv)"]
 )
 
-if not combinations:
-    st.warning("Envie pelo menos 1 Gancho, 1 Corpo e 1 CTA.")
+if "NVIDIA" in tipo_gpu:
+    encoder_escolhido = "h264_nvenc"
+elif "AMD" in tipo_gpu:
+    encoder_escolhido = "h264_amf"
+elif "Intel" in tipo_gpu:
+    encoder_escolhido = "h264_qsv"
 else:
-    if st.button("🚀 GERAR VÍDEOS", type="primary"):
+    encoder_escolhido = "libx264"
 
-        st.session_state.generated_files = []
-        st.session_state.zip_bytes = None
+st.divider()
 
-        progress = st.progress(0)
-        status = st.empty()
+st.markdown("#### 🛡️ Modificadores Anti-Duplicidade Agressivos (Sem Alterar Voz)")
+col_e1, col_e2 = st.columns(2)
+with col_e1:
+    auto_ultra_anti_dup = st.checkbox("Modo Ultra Anti-Duplicidade (Brilho/Contraste, Pan/Crop Estável)", value=True)
+with col_e2:
+    espelhar_blocos_rand = st.checkbox("Espelhamento Aleatório por Bloco (Gancho/Corpo/CTA)", value=True)
 
-        generated = []
+st.divider()
 
-        try:
-            with tempfile.TemporaryDirectory() as temp_dir:
-                temp = Path(temp_dir)
+st.markdown("#### 📌 Hooks Alternativos (Texto Inclinado no topo)")
+hook_ativo = st.checkbox("Ativar Hook no topo do vídeo", value=True)
 
-                upload_dir = temp / "uploads"
-                normalized_dir = temp / "normalized"
-                output_dir = temp / "output"
-
-                upload_dir.mkdir()
-                normalized_dir.mkdir()
-                output_dir.mkdir()
-
-                status.info("📥 Preparando os arquivos enviados...")
-
-                # Salvar uploads
-                gancho_paths = []
-                corpo_paths = []
-                cta_paths = []
-
-                for i, file in enumerate(ganchos, start=1):
-                    gancho_paths.append(
-                        save_uploaded_file(
-                            file,
-                            upload_dir,
-                            f"gancho_{i}",
-                        )
-                    )
-
-                for i, file in enumerate(corpos, start=1):
-                    corpo_paths.append(
-                        save_uploaded_file(
-                            file,
-                            upload_dir,
-                            f"corpo_{i}",
-                        )
-                    )
-
-                for i, file in enumerate(ctas, start=1):
-                    cta_paths.append(
-                        save_uploaded_file(
-                            file,
-                            upload_dir,
-                            f"cta_{i}",
-                        )
-                    )
-
-                # Normalizar somente os arquivos usados
-                all_originals = gancho_paths + corpo_paths + cta_paths
-                normalized = {}
-
-                status.info("🎞️ Preparando os vídeos para combinação...")
-
-                for index, original in enumerate(all_originals, start=1):
-                    normalized_file = (
-                        normalized_dir /
-                        f"normalized_{index:03d}.mp4"
-                    )
-
-                    normalize_video(
-                        original,
-                        normalized_file,
-                    )
-
-                    normalized[str(original)] = normalized_file
-
-                total_to_process = len(combinations)
-
-                for idx, combo in enumerate(combinations, start=1):
-                    gancho_file, corpo_file, cta_file = combo
-
-                    g = normalized[str(gancho_paths[ganchos.index(gancho_file)])]
-                    c = normalized[str(corpo_paths[corpos.index(corpo_file)])]
-                    t = normalized[str(cta_paths[ctas.index(cta_file)])]
-
-                    gancho_index = ganchos.index(gancho_file) + 1
-                    corpo_index = corpos.index(corpo_file) + 1
-                    cta_index = ctas.index(cta_file) + 1
-
-                    output_name = (
-                        f"{filename_prefix}_"
-                        f"{idx:03d}_"
-                        f"G{gancho_index}_"
-                        f"C{corpo_index}_"
-                        f"CTA{cta_index}.mp4"
-                    )
-
-                    output_file = output_dir / output_name
-
-                    status.info(
-                        f"🎬 Gerando vídeo {idx} de "
-                        f"{total_to_process}: {output_name}"
-                    )
-
-                    concatenate_videos(
-                        [g, c, t],
-                        output_file,
-                    )
-
-                    # Copiar para memória da sessão
-                    generated.append(
-                        (
-                            output_name,
-                            output_file.read_bytes(),
-                        )
-                    )
-
-                    progress.progress(
-                        int(idx / total_to_process * 100)
-                    )
-
-                # Criar ZIP
-                status.info("📦 Criando arquivo ZIP...")
-
-                zip_file = temp / f"{filename_prefix}_VIDEOS.zip"
-
-                with zipfile.ZipFile(
-                    zip_file,
-                    "w",
-                    compression=zipfile.ZIP_DEFLATED,
-                ) as z:
-                    for name, data in generated:
-                        z.writestr(name, data)
-
-                st.session_state.generated_files = generated
-                st.session_state.zip_bytes = zip_file.read_bytes()
-
-                progress.progress(100)
-
-                status.success(
-                    f"🎉 {len(generated)} vídeo(s) gerado(s) com sucesso!"
-                )
-
-        except Exception as e:
-            progress.empty()
-            status.error("❌ Ocorreu um erro durante a geração.")
-            st.exception(e)
-
-
-# ============================================================
-# RESULTADOS
-# ============================================================
-
-if st.session_state.generated_files:
-
-    st.markdown("---")
-    st.subheader("🎉 Vídeos gerados")
-
-    st.success(
-        f"✅ {len(st.session_state.generated_files)} "
-        f"vídeo(s) gerado(s)!"
-    )
-
-    for number, (name, data) in enumerate(
-        st.session_state.generated_files,
-        start=1,
-    ):
-        with st.expander(f"🎬 {number:03d} — {name}"):
-
-            st.video(data)
-
-            st.download_button(
-                "⬇️ Baixar este vídeo",
-                data=data,
-                file_name=name,
-                mime="video/mp4",
-                key=f"download_{number}_{name}",
-            )
-
-    st.markdown("---")
-
-    if st.session_state.zip_bytes:
-        zip_name = f"{safe_name(project)}_VIDEOS.zip"
-
-        st.success(
-            f"📦 ZIP pronto com "
-            f"{len(st.session_state.generated_files)} vídeo(s)."
+if hook_ativo:
+    col_h1, col_h2, col_h3 = st.columns([2, 1, 1])
+    with col_h1:
+        texto_manchete = st.text_area(
+            "Escreva frases de Hook (Uma frase por linha para ser usada nas variações):",
+            value="",
+            placeholder="Digite suas frases aqui (uma por linha)...",
+            height=120
         )
+    with col_h2:
+        posicao_hook_y = st.number_input("Posição do Hook (px do topo):", min_value=10, max_value=1200, value=200, step=10)
+    with col_h3:
+        tamanho_hook = st.number_input("Tamanho da Fonte do Hook:", min_value=20, max_value=250, value=100, step=5)
+else:
+    texto_manchete = ""
+    posicao_hook_y = 200
+    tamanho_hook = 100
 
+st.divider()
+
+st.markdown("#### 🗣️ Legendas Automáticas (Word Pop Zoom + Destaque Amarelo)")
+legenda_ativa = st.checkbox("Ativar Legendas Automáticas no Vídeo", value=True)
+
+if legenda_ativa:
+    col_l1, col_l2 = st.columns(2)
+    with col_l1:
+        posicao_legenda_v = st.slider("Altura da Legenda na Tela (px a partir de baixo):", min_value=100, max_value=1200, value=450, step=20)
+    with col_l2:
+        tamanho_legenda = st.number_input("Tamanho da Fonte da Legenda:", min_value=40, max_value=150, value=80, step=5)
+else:
+    posicao_legenda_v = 450
+    tamanho_legenda = 80
+
+st.divider()
+
+# --- BOTÃO DE PROCESSAMENTO ---
+if st.button("🚀 Multiplicar e Gerar Todos os Vídeos", type="primary", use_container_width=True):
+    list_h = [os.path.join(PATH_GANCHOS, f) for f in os.listdir(PATH_GANCHOS) if f.endswith(('mp4', 'mov'))]
+    list_m = [os.path.join(PATH_CORPOS, f) for f in os.listdir(PATH_CORPOS) if f.endswith(('mp4', 'mov'))]
+    list_c = [os.path.join(PATH_CTAS, f) for f in os.listdir(PATH_CTAS) if f.endswith(('mp4', 'mov'))]
+
+    if len(list_h) < 1 or len(list_m) < 1 or len(list_c) < 1:
+        st.error("Adicione pelo menos 1 vídeo em cada uma das 3 colunas para gerar!")
+    else:
+        lista_hooks = [linha.strip().upper() for linha in texto_manchete.split('\n') if linha.strip()]
+
+        combos = list(itertools.product(list_h, list_m, list_c))
+        st.success(f"🔥 Gerando {len(combos)} vídeo(s) com Encoder [{encoder_escolhido}]...")
+        prog = st.progress(0)
+
+        for idx, (h, m, c) in enumerate(combos):
+            print(f"\n=================== PROCESSANDO VARIAÇÃO {idx+1}/{len(combos)} ===================")
+            out_final = os.path.abspath(os.path.join(PATH_OUTPUT, f"video_final_{idx+1}.mp4"))
+            
+            # Arquivos temporários dos blocos com espelhamento aleatório
+            h_tmp = os.path.abspath(os.path.join(PROJ_PATH, f"tmp_h_{idx}.mp4"))
+            m_tmp = os.path.abspath(os.path.join(PROJ_PATH, f"tmp_m_{idx}.mp4"))
+            c_tmp = os.path.abspath(os.path.join(PROJ_PATH, f"tmp_c_{idx}.mp4"))
+
+            # Sorteio de espelhamento por bloco
+            esp_h = random.choice([True, False]) if espelhar_blocos_rand else False
+            esp_m = random.choice([True, False]) if espelhar_blocos_rand else False
+            esp_c = random.choice([True, False]) if espelhar_blocos_rand else False
+
+            processar_bloco_individual(h, h_tmp, encoder_escolhido, esp_h)
+            processar_bloco_individual(m, m_tmp, encoder_escolhido, esp_m)
+            processar_bloco_individual(c, c_tmp, encoder_escolhido, esp_c)
+
+            concat_list = os.path.abspath(os.path.join(PROJ_PATH, f"list_{idx}.txt"))
+            with open(concat_list, "w", encoding="utf-8") as f:
+                f.write(f"file '{h_tmp}'\nfile '{m_tmp}'\nfile '{c_tmp}'\n")
+
+            # 1. PASSO 1: Concatenação segura com re-encodamento
+            cmd_concat = f'ffmpeg -y -f concat -safe 0 -i "{concat_list}" -c:v {encoder_escolhido} -pix_fmt yuv420p -c:a aac "{out_final}"'
+            subprocess.run(cmd_concat, shell=True)
+
+            # Remover blocos temporários
+            for t_b in [h_tmp, m_tmp, c_tmp]:
+                if os.path.exists(t_b): os.remove(t_b)
+
+            if not os.path.exists(out_final):
+                st.error(f"Erro ao concatenar variação {idx+1}. Mude para 'CPU Padrão' nas opções!")
+                continue
+
+            # 2. PASSO 2: Legendas Word Pop ASS
+            ass_file = os.path.abspath(os.path.join(PROJ_PATH, f"temp_{idx}.ass"))
+            if legenda_ativa:
+                has_leg = gerar_legenda_ass(out_final, ass_file, posicao_v=posicao_legenda_v, tamanho_fonte=tamanho_legenda)
+                if has_leg and os.path.exists(ass_file):
+                    temp_leg = os.path.abspath(os.path.join(PROJ_PATH, f"temp_leg_{idx}.mp4"))
+                    ass_path_clean = ass_file.replace("\\", "/").replace(":", "\\:")
+                    cmd_leg = f'ffmpeg -y -i "{out_final}" -vf "subtitles=\'{ass_path_clean}\'" -c:v {encoder_escolhido} -pix_fmt yuv420p -c:a copy "{temp_leg}"'
+                    subprocess.run(cmd_leg, shell=True)
+                    if os.path.exists(temp_leg):
+                        shutil.move(temp_leg, out_final)
+
+            # 3. PASSO 3: Hook Inclinado no Topo
+            if hook_ativo and lista_hooks:
+                hook_selecionado = lista_hooks[idx % len(lista_hooks)]
+                hook_ass_file = os.path.abspath(os.path.join(PROJ_PATH, f"temp_hook_{idx}.ass"))
+                gerar_hook_ass(hook_selecionado, hook_ass_file, posicao_y=posicao_hook_y, tamanho_fonte=tamanho_hook)
+                
+                if os.path.exists(hook_ass_file):
+                    temp_hk = os.path.abspath(os.path.join(PROJ_PATH, f"temp_hk_{idx}.mp4"))
+                    hook_path_clean = hook_ass_file.replace("\\", "/").replace(":", "\\:")
+                    cmd_hk = f'ffmpeg -y -i "{out_final}" -vf "subtitles=\'{hook_path_clean}\'" -c:v {encoder_escolhido} -pix_fmt yuv420p -c:a copy "{temp_hk}"'
+                    subprocess.run(cmd_hk, shell=True)
+                    if os.path.exists(temp_hk):
+                        shutil.move(temp_hk, out_final)
+                    if os.path.exists(hook_ass_file): os.remove(hook_ass_file)
+
+            # 4. PASSO 4: MODIFICADORES VISUAIS ESTÁVEIS
+            if auto_ultra_anti_dup:
+                filtros_v = []
+
+                # Pan & Scan seguro (Redimensiona sempre para 1080x1920 no final)
+                factor = round(random.uniform(0.85, 0.95), 2)
+                filtros_v.append(f"crop=iw*{factor}:ih*{factor}")
+                filtros_v.append("scale=1080:1920")
+
+                # GRADAÇÃO DINÂMICA DE COR ESTÁVEL
+                color_preset = random.choice([
+                    "eq=brightness=0.02:contrast=1.05:saturation=1.04",
+                    "eq=brightness=-0.015:contrast=1.07:saturation=0.96",
+                    "eq=brightness=0.01:contrast=1.03:saturation=1.08",
+                    "eq=brightness=-0.005:contrast=1.06:saturation=1.00",
+                    "eq=brightness=0.025:contrast=1.02:saturation=0.95",
+                    "eq=brightness=-0.02:contrast=1.04:saturation=1.05",
+                ])
+                filtros_v.append(color_preset)
+
+                temp_filt = os.path.abspath(os.path.join(PROJ_PATH, f"temp_filt_{idx}.mp4"))
+                
+                cmd_v_str = f'-vf "{",".join(filtros_v)}"'
+
+                cmd_filt = (
+                    f'ffmpeg -y -i "{out_final}" {cmd_v_str} -c:v {encoder_escolhido} -pix_fmt yuv420p -c:a copy '
+                    f'-metadata title="" -metadata comment="" -metadata encoder="Apple iOS Camera 17.4.1" '
+                    f'"{temp_filt}"'
+                )
+                print(f"Aplicando Modulação Visual Anti-Duplicidade: {cmd_filt}")
+                subprocess.run(cmd_filt, shell=True)
+
+                if os.path.exists(temp_filt):
+                    shutil.move(temp_filt, out_final)
+
+            # Limpeza de temporários
+            for t_file in [concat_list, ass_file]:
+                if os.path.exists(t_file): os.remove(t_file)
+
+            prog.progress((idx + 1) / len(combos))
+
+        st.balloons()
+        st.success(f"🎉 {len(combos)} vídeo(s) gerados com sucesso!")
+        st.rerun()
+
+st.divider()
+
+# --- 3. SEÇÃO DE VÍDEOS PRONTOS E BAIXAR TUDO INCLUSO ---
+st.subheader("3. Vídeos Prontos & Downloads")
+
+videos_gerados = sorted([f for f in os.listdir(PATH_OUTPUT) if f.endswith('.mp4')])
+
+if not videos_gerados:
+    st.info("ℹ️ Nenhum vídeo gerado ainda. Suba os arquivos nas colunas acima e clique no botão para gerar!")
+else:
+    zip_path = os.path.join(PROJ_PATH, f"{projeto_atual}_todos_os_videos.zip")
+    criar_zip_projeto(PATH_OUTPUT, zip_path)
+    
+    with open(zip_path, "rb") as fp:
         st.download_button(
-            "📦 BAIXAR TODOS OS VÍDEOS",
-            data=st.session_state.zip_bytes,
-            file_name=zip_name,
+            label=f"📦 BAIXAR TODOS OS {len(videos_gerados)} VÍDEOS (.ZIP)",
+            data=fp,
+            file_name=f"{projeto_atual}_videos.zip",
             mime="application/zip",
             type="primary",
-            key="download_all_zip",
+            use_container_width=True
         )
-
-
-# ============================================================
-# RODAPÉ
-# ============================================================
-
-st.markdown("---")
-
-st.caption(
-    "🎬 AI Creative Engine • Gerador de criativos em vídeo"
-)
+    
+    st.write("")
+    st.write("**Galeria de Vídeos Prontos:**")
+    
+    cols_grid = st.columns(3)
+    score_geral = calcular_score_local(texto_manchete)
+    
+    for idx, vid_file in enumerate(videos_gerados):
+        col_target = cols_grid[idx % 3]
+        vid_path = os.path.join(PATH_OUTPUT, vid_file)
+        
+        with col_target:
+            with st.container(border=True):
+                st.markdown(f"**📹 {vid_file}**")
+                st.video(vid_path)
+                
+                score_variacao = min(100, max(60, score_geral + (idx % 5) - 2))
+                st.metric(label="🎯 Hook Score", value=f"{score_variacao} / 100")
+                
+                with open(vid_path, "rb") as f_vid:
+                    st.download_button(
+                        label="⬇️ Baixar Este Vídeo",
+                        data=f_vid,
+                        file_name=vid_file,
+                        mime="video/mp4",
+                        use_container_width=True,
+                        key=f"btn_dl_{idx}"
+                    )
