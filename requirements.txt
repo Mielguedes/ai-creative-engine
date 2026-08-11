@@ -1,4 +1,4 @@
 streamlit
+supabase
 faster-whisper
 imageio-ffmpeg
-supabase
