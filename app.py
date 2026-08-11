@@ -20,7 +20,7 @@ st.set_page_config(
     page_title="AI Creative Engine",
     page_icon="🎬",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
 
 
@@ -37,27 +37,40 @@ SUPABASE_KEY = str(
 ).strip()
 
 
-# Se colocou a URL terminando em /rest/v1/,
-# o código corrige automaticamente.
+# Aceita:
+# https://xxxxx.supabase.co
+# ou
+# https://xxxxx.supabase.co/rest/v1/
+
 if SUPABASE_URL.endswith("/rest/v1"):
     SUPABASE_URL = SUPABASE_URL[:-8].rstrip("/")
 
 
 if not SUPABASE_URL:
-    st.error("❌ SUPABASE_URL não configurada nos Secrets.")
+    st.error(
+        "❌ SUPABASE_URL não configurada nos Secrets."
+    )
     st.stop()
 
 
 if not SUPABASE_KEY:
-    st.error("❌ SUPABASE_KEY não configurada nos Secrets.")
+    st.error(
+        "❌ SUPABASE_KEY não configurada nos Secrets."
+    )
     st.stop()
 
 
 if not SUPABASE_URL.startswith("https://"):
-    st.error("❌ SUPABASE_URL inválida.")
+    st.error(
+        "❌ SUPABASE_URL inválida."
+    )
     st.code(SUPABASE_URL)
     st.stop()
 
+
+# ============================================================
+# CONEXÃO SUPABASE
+# ============================================================
 
 try:
 
@@ -68,13 +81,19 @@ try:
 
 except Exception as erro:
 
-    st.error("❌ Erro ao conectar ao Supabase.")
-    st.code(str(erro))
+    st.error(
+        "❌ Erro ao conectar ao Supabase."
+    )
+
+    st.code(
+        str(erro)
+    )
+
     st.stop()
 
 
 # ============================================================
-# FUNÇÃO PARA RESTAURAR SESSÃO
+# RESTAURAR SESSÃO
 # ============================================================
 
 def restaurar_sessao():
@@ -87,42 +106,77 @@ def restaurar_sessao():
         "refresh_token"
     )
 
+
     if not access_token or not refresh_token:
+
         return False
+
 
     try:
 
-        supabase.auth.set_session(
-            access_token,
-            refresh_token
+        resposta = (
+            supabase.auth.set_session(
+                access_token,
+                refresh_token
+            )
         )
 
-        resposta = supabase.auth.get_user()
 
-        if resposta and resposta.user:
+        usuario = getattr(
+            resposta,
+            "user",
+            None
+        )
+
+
+        sessao = getattr(
+            resposta,
+            "session",
+            None
+        )
+
+
+        if usuario:
+
+            if sessao:
+
+                st.session_state[
+                    "access_token"
+                ] = sessao.access_token
+
+
+                st.session_state[
+                    "refresh_token"
+                ] = sessao.refresh_token
+
 
             st.session_state[
                 "autenticado"
             ] = True
 
+
             st.session_state[
                 "usuario_id"
             ] = str(
-                resposta.user.id
+                usuario.id
             )
+
 
             st.session_state[
                 "usuario_email"
             ] = (
-                resposta.user.email
+                usuario.email
                 or ""
             )
 
+
             return True
+
 
     except Exception:
 
-        return False
+        pass
+
 
     return False
 
@@ -133,18 +187,17 @@ def restaurar_sessao():
 
 def fazer_login():
 
-    # Primeiro tenta restaurar uma sessão existente.
+    # Tenta recuperar uma sessão existente.
     if restaurar_sessao():
 
         return True
 
 
     st.markdown(
-        """
-        <h1>🔐 AI Creative Engine</h1>
-        """,
+        "<h1>🔐 AI Creative Engine</h1>",
         unsafe_allow_html=True
     )
+
 
     st.caption(
         "Entre para acessar o gerador de vídeos."
@@ -199,7 +252,8 @@ def fazer_login():
         try:
 
             resposta = (
-                supabase.auth
+                supabase
+                .auth
                 .sign_in_with_password(
                     {
                         "email": email,
@@ -209,16 +263,21 @@ def fazer_login():
             )
 
 
-            if not resposta:
-
-                st.error(
-                    "❌ Não foi possível autenticar."
-                )
-
-                return False
+            usuario = getattr(
+                resposta,
+                "user",
+                None
+            )
 
 
-            if not resposta.user:
+            sessao = getattr(
+                resposta,
+                "session",
+                None
+            )
+
+
+            if not usuario or not sessao:
 
                 st.error(
                     "❌ E-mail ou senha incorretos."
@@ -227,24 +286,23 @@ def fazer_login():
                 return False
 
 
-            # ==================================================
-            # SALVAR A SESSÃO
-            # ==================================================
+            # ================================================
+            # SALVAR SESSÃO
+            # ================================================
 
-            if resposta.session:
-
-                st.session_state[
-                    "access_token"
-                ] = resposta.session.access_token
-
-                st.session_state[
-                    "refresh_token"
-                ] = resposta.session.refresh_token
+            st.session_state[
+                "access_token"
+            ] = sessao.access_token
 
 
-            # ==================================================
+            st.session_state[
+                "refresh_token"
+            ] = sessao.refresh_token
+
+
+            # ================================================
             # SALVAR USUÁRIO
-            # ==================================================
+            # ================================================
 
             st.session_state[
                 "autenticado"
@@ -254,14 +312,14 @@ def fazer_login():
             st.session_state[
                 "usuario_id"
             ] = str(
-                resposta.user.id
+                usuario.id
             )
 
 
             st.session_state[
                 "usuario_email"
             ] = (
-                resposta.user.email
+                usuario.email
                 or email
             )
 
@@ -277,7 +335,9 @@ def fazer_login():
 
         except Exception as erro:
 
-            mensagem = str(erro)
+            mensagem = str(
+                erro
+            )
 
 
             if (
@@ -289,11 +349,13 @@ def fazer_login():
                     "❌ E-mail ou senha incorretos."
                 )
 
+
             else:
 
                 st.error(
                     "❌ ERRO REAL DO LOGIN:"
                 )
+
 
                 st.code(
                     mensagem
@@ -313,7 +375,7 @@ if not fazer_login():
 
 
 # ============================================================
-# USUÁRIO ATUAL
+# USUÁRIO LOGADO
 # ============================================================
 
 USUARIO_ID = str(
@@ -342,22 +404,14 @@ if not USUARIO_ID:
 
 
 # ============================================================
-# ESTRUTURA DE PASTAS
+# PASTA EXCLUSIVA DO USUÁRIO
 # ============================================================
-
-# Cada usuário possui sua própria pasta.
-#
-# projetos/
-#    ID_DO_USUARIO/
-#        Projeto A/
-#        Projeto B/
-#
-# Assim os arquivos locais também ficam separados.
 
 BASE_DIR = (
     Path("projetos")
     / USUARIO_ID
 )
+
 
 BASE_DIR.mkdir(
     parents=True,
@@ -378,13 +432,15 @@ def safe_name(nome):
         flags=re.UNICODE
     )
 
+
     nome = nome.strip()
+
 
     return nome or "arquivo"
 
 
 # ============================================================
-# PROJETOS NO SUPABASE
+# LISTAR PROJETOS DO USUÁRIO
 # ============================================================
 
 def listar_projetos():
@@ -413,7 +469,8 @@ def listar_projetos():
 
 
         for item in (
-            resposta.data or []
+            resposta.data
+            or []
         ):
 
             nome = item.get(
@@ -445,7 +502,7 @@ def listar_projetos():
 
 
 # ============================================================
-# VERIFICAR SE PROJETO EXISTE
+# VERIFICAR PROJETO
 # ============================================================
 
 def projeto_existe(nome):
@@ -508,22 +565,25 @@ def criar_projeto(nome):
         return None
 
 
-    # ------------------------------------------
-    # CRIAR NO SUPABASE
-    # ------------------------------------------
+    # ---------------------------------------------
+    # SALVAR NO SUPABASE
+    # ---------------------------------------------
 
     if not projeto_existe(nome):
 
         try:
 
-            supabase.table(
-                "projects"
-            ).insert(
-                {
-                    "user_id": USUARIO_ID,
-                    "name": nome
-                }
-            ).execute()
+            (
+                supabase
+                .table("projects")
+                .insert(
+                    {
+                        "user_id": USUARIO_ID,
+                        "name": nome
+                    }
+                )
+                .execute()
+            )
 
 
         except Exception as erro:
@@ -539,9 +599,9 @@ def criar_projeto(nome):
             return None
 
 
-    # ------------------------------------------
+    # ---------------------------------------------
     # CRIAR PASTAS
-    # ------------------------------------------
+    # ---------------------------------------------
 
     projeto = (
         BASE_DIR
@@ -549,12 +609,12 @@ def criar_projeto(nome):
     )
 
 
-    for pasta in [
+    for pasta in (
         "ganchos",
         "corpos",
         "ctas",
         "output"
-    ]:
+    ):
 
         (
             projeto
@@ -595,48 +655,38 @@ def deletar_projeto(nome):
 
     # Apagar somente o projeto
     # pertencente ao usuário atual.
-    (
-        supabase
-        .table("projects")
-        .delete()
-        .eq(
-            "user_id",
-            USUARIO_ID
+    try:
+
+        (
+            supabase
+            .table("projects")
+            .delete()
+            .eq(
+                "user_id",
+                USUARIO_ID
+            )
+            .eq(
+                "name",
+                nome
+            )
+            .execute()
         )
-        .eq(
-            "name",
-            nome
+
+
+    except Exception as erro:
+
+        st.error(
+            "❌ Erro ao excluir projeto no Supabase."
         )
-        .execute()
-    )
+
+        st.code(
+            str(erro)
+        )
+
+        return False
 
 
-# ============================================================
-# LIMPAR ESTADO DOS UPLOADS
-# ============================================================
-
-def limpar_estado_upload():
-
-    chaves = list(
-        st.session_state.keys()
-    )
-
-
-    for chave in chaves:
-
-        if chave.startswith(
-            "upload_"
-        ):
-
-            try:
-
-                del st.session_state[
-                    chave
-                ]
-
-            except Exception:
-
-                pass
+    return True
 
 
 # ============================================================
@@ -657,17 +707,17 @@ def videos_da_pasta(pasta):
             if (
                 arquivo.is_file()
                 and arquivo.suffix.lower()
-                in [
+                in (
                     ".mp4",
                     ".mov"
-                ]
+                )
             )
         ]
     )
 
 
 # ============================================================
-# SALVAR UPLOAD
+# SALVAR UPLOADS
 # ============================================================
 
 def salvar_uploads(
@@ -684,7 +734,9 @@ def salvar_uploads(
     salvos = []
 
 
-    for arquivo in arquivos or []:
+    for arquivo in (
+        arquivos or []
+    ):
 
         if arquivo is None:
 
@@ -696,10 +748,10 @@ def salvar_uploads(
         ).suffix.lower()
 
 
-        if extensao not in [
+        if extensao not in (
             ".mp4",
             ".mov"
-        ]:
+        ):
 
             continue
 
@@ -743,262 +795,6 @@ def salvar_uploads(
 
 
     return salvos
-
-
-# ============================================================
-# CRIAR PROJETO PADRÃO
-# ============================================================
-
-projetos = listar_projetos()
-
-
-if not projetos:
-
-    criar_projeto(
-        "NOVO_PROJETO"
-    )
-
-    projetos = listar_projetos()
-
-
-if not projetos:
-
-    st.error(
-        "❌ Não foi possível criar o projeto inicial."
-    )
-
-    st.stop()
-
-
-# ============================================================
-# SIDEBAR
-# ============================================================
-
-st.sidebar.title(
-    "📁 Projetos"
-)
-
-
-st.sidebar.caption(
-    f"👤 {USUARIO_EMAIL}"
-)
-
-
-# ============================================================
-# SAIR
-# ============================================================
-
-if st.sidebar.button(
-    "🚪 Sair",
-    use_container_width=True
-):
-
-    try:
-
-        supabase.auth.sign_out()
-
-    except Exception:
-
-        pass
-
-
-    # Limpar sessão.
-    chaves = [
-        "autenticado",
-        "usuario_id",
-        "usuario_email",
-        "access_token",
-        "refresh_token",
-        "projeto_ativo"
-    ]
-
-
-    for chave in chaves:
-
-        st.session_state.pop(
-            chave,
-            None
-        )
-
-
-    st.rerun()
-
-
-# ============================================================
-# NOVO PROJETO
-# ============================================================
-
-novo_projeto = st.sidebar.text_input(
-    "Novo Projeto:",
-    key="novo_projeto_input"
-)
-
-
-if st.sidebar.button(
-    "➕ Criar Projeto",
-    use_container_width=True
-):
-
-    if novo_projeto.strip():
-
-        nome = safe_name(
-            novo_projeto.strip()
-        )
-
-
-        resultado = criar_projeto(
-            nome
-        )
-
-
-        if resultado:
-
-            st.session_state[
-                "projeto_ativo"
-            ] = nome
-
-
-            st.session_state[
-                "novo_projeto_input"
-            ] = ""
-
-
-            st.rerun()
-
-
-    else:
-
-        st.sidebar.warning(
-            "Digite o nome do projeto."
-        )
-
-
-# ============================================================
-# ATUALIZAR PROJETOS
-# ============================================================
-
-projetos = listar_projetos()
-
-
-if not projetos:
-
-    criar_projeto(
-        "NOVO_PROJETO"
-    )
-
-    projetos = listar_projetos()
-
-
-if not projetos:
-
-    st.error(
-        "❌ Nenhum projeto disponível."
-    )
-
-    st.stop()
-
-
-# ============================================================
-# PROJETO ATIVO
-# ============================================================
-
-projeto_padrao = st.session_state.get(
-    "projeto_ativo",
-    projetos[0]
-)
-
-
-if projeto_padrao not in projetos:
-
-    projeto_padrao = projetos[0]
-
-
-projeto_ativo = st.sidebar.selectbox(
-    "Selecione o Projeto Ativo:",
-    projetos,
-    index=projetos.index(
-        projeto_padrao
-    )
-)
-
-
-st.session_state[
-    "projeto_ativo"
-] = projeto_ativo
-
-
-# ============================================================
-# DELETAR PROJETO
-# ============================================================
-
-if st.sidebar.button(
-    "🗑️ Deletar Projeto Atual",
-    type="primary",
-    use_container_width=True
-):
-
-    try:
-
-        deletar_projeto(
-            projeto_ativo
-        )
-
-
-        limpar_estado_upload()
-
-
-        st.session_state.pop(
-            "projeto_ativo",
-            None
-        )
-
-
-        st.rerun()
-
-
-    except Exception as erro:
-
-        st.sidebar.error(
-            f"❌ Erro ao deletar: {erro}"
-        )
-
-
-# ============================================================
-# ESTRUTURA DO PROJETO
-# ============================================================
-
-PROJETO = criar_projeto(
-    projeto_ativo
-)
-
-
-if PROJETO is None:
-
-    st.stop()
-
-
-PATH_GANCHOS = (
-    PROJETO
-    / "ganchos"
-)
-
-
-PATH_CORPOS = (
-    PROJETO
-    / "corpos"
-)
-
-
-PATH_CTAS = (
-    PROJETO
-    / "ctas"
-)
-
-
-PATH_OUTPUT = (
-    PROJETO
-    / "output"
-)
 
 
 # ============================================================
@@ -1197,4 +993,1149 @@ def juntar_videos(
             )
 
 
-            normalizar_v
+            normalizar_video(
+                video,
+                destino
+            )
+
+
+            normalizados.append(
+                destino
+            )
+
+
+        lista = (
+            temp_path
+            / "lista.txt"
+        )
+
+
+        with open(
+            lista,
+            "w",
+            encoding="utf-8"
+        ) as arquivo:
+
+            for video in normalizados:
+
+                caminho = (
+                    str(video)
+                    .replace(
+                        "\\",
+                        "/"
+                    )
+                )
+
+
+                arquivo.write(
+                    f"file '{caminho}'\n"
+                )
+
+
+        executar_ffmpeg(
+            [
+                "-y",
+
+                "-f",
+                "concat",
+
+                "-safe",
+                "0",
+
+                "-i",
+                str(lista),
+
+                "-c",
+                "copy",
+
+                "-movflags",
+                "+faststart",
+
+                str(arquivo_saida)
+            ]
+        )
+
+
+# ============================================================
+# ZIP
+# ============================================================
+
+def criar_zip(
+    pasta_saida,
+    arquivo_zip
+):
+
+    videos = sorted(
+        pasta_saida.glob(
+            "*.mp4"
+        )
+    )
+
+
+    with zipfile.ZipFile(
+        arquivo_zip,
+        "w",
+        zipfile.ZIP_DEFLATED
+    ) as zipado:
+
+        for video in videos:
+
+            zipado.write(
+                video,
+                arcname=video.name
+            )
+
+
+# ============================================================
+# CRIAR PROJETO PADRÃO
+# ============================================================
+
+projetos = listar_projetos()
+
+
+if not projetos:
+
+    criar_projeto(
+        "NOVO_PROJETO"
+    )
+
+    projetos = listar_projetos()
+
+
+if not projetos:
+
+    st.error(
+        "❌ Não foi possível criar o projeto inicial."
+    )
+
+    st.stop()
+
+
+# ============================================================
+# SIDEBAR
+# ============================================================
+
+st.sidebar.title(
+    "📁 Projetos"
+)
+
+
+st.sidebar.caption(
+    f"👤 {USUARIO_EMAIL}"
+)
+
+
+# ============================================================
+# SAIR
+# ============================================================
+
+if st.sidebar.button(
+    "🚪 Sair",
+    use_container_width=True
+):
+
+    try:
+
+        supabase.auth.sign_out()
+
+    except Exception:
+
+        pass
+
+
+    for chave in (
+        "autenticado",
+        "usuario_id",
+        "usuario_email",
+        "access_token",
+        "refresh_token",
+        "projeto_ativo"
+    ):
+
+        st.session_state.pop(
+            chave,
+            None
+        )
+
+
+    st.rerun()
+
+
+# ============================================================
+# NOVO PROJETO
+# ============================================================
+
+novo_projeto = st.sidebar.text_input(
+    "Novo Projeto",
+    key="novo_projeto_input"
+)
+
+
+if st.sidebar.button(
+    "➕ Criar Projeto",
+    use_container_width=True
+):
+
+    nome = safe_name(
+        novo_projeto.strip()
+    )
+
+
+    if not novo_projeto.strip():
+
+        st.sidebar.warning(
+            "Digite o nome do projeto."
+        )
+
+
+    elif projeto_existe(nome):
+
+        st.sidebar.warning(
+            "⚠️ Esse projeto já existe."
+        )
+
+
+    else:
+
+        resultado = criar_projeto(
+            nome
+        )
+
+
+        if resultado:
+
+            # IMPORTANTE:
+            # NÃO alteramos o valor do widget
+            # novo_projeto_input aqui.
+            #
+            # Isso evita o erro:
+            # StreamlitAPIException
+
+            st.session_state[
+                "projeto_ativo"
+            ] = nome
+
+
+            st.rerun()
+
+
+# ============================================================
+# ATUALIZAR PROJETOS
+# ============================================================
+
+projetos = listar_projetos()
+
+
+if not projetos:
+
+    criar_projeto(
+        "NOVO_PROJETO"
+    )
+
+    projetos = listar_projetos()
+
+
+if not projetos:
+
+    st.error(
+        "❌ Nenhum projeto disponível."
+    )
+
+    st.stop()
+
+
+# ============================================================
+# PROJETO ATIVO
+# ============================================================
+
+projeto_padrao = st.session_state.get(
+    "projeto_ativo",
+    projetos[0]
+)
+
+
+if projeto_padrao not in projetos:
+
+    projeto_padrao = projetos[0]
+
+
+projeto_ativo = st.sidebar.selectbox(
+    "Selecione o Projeto Ativo",
+    projetos,
+    index=projetos.index(
+        projeto_padrao
+    ),
+    key="seletor_projeto"
+)
+
+
+st.session_state[
+    "projeto_ativo"
+] = projeto_ativo
+
+
+# ============================================================
+# DELETAR PROJETO
+# ============================================================
+
+if st.sidebar.button(
+    "🗑️ Deletar Projeto Atual",
+    type="primary",
+    use_container_width=True
+):
+
+    if deletar_projeto(
+        projeto_ativo
+    ):
+
+        restantes = listar_projetos()
+
+
+        if not restantes:
+
+            criar_projeto(
+                "NOVO_PROJETO"
+            )
+
+
+        st.session_state.pop(
+            "projeto_ativo",
+            None
+        )
+
+
+        st.rerun()
+
+
+# ============================================================
+# ESTRUTURA DO PROJETO
+# ============================================================
+
+PROJETO = criar_projeto(
+    projeto_ativo
+)
+
+
+if PROJETO is None:
+
+    st.stop()
+
+
+PATH_GANCHOS = (
+    PROJETO
+    / "ganchos"
+)
+
+
+PATH_CORPOS = (
+    PROJETO
+    / "corpos"
+)
+
+
+PATH_CTAS = (
+    PROJETO
+    / "ctas"
+)
+
+
+PATH_OUTPUT = (
+    PROJETO
+    / "output"
+)
+
+
+# ============================================================
+# TÍTULO
+# ============================================================
+
+st.title(
+    "🎬 AI Creative Engine"
+)
+
+
+st.caption(
+    "Multiplicador modular de vídeos • "
+    "9:16 • Geração local"
+)
+
+
+# ============================================================
+# GERENCIAMENTO
+# ============================================================
+
+st.header(
+    "1. Gerenciamento dos Blocos de Vídeo"
+)
+
+
+col1, col2, col3 = st.columns(
+    3
+)
+
+
+# ============================================================
+# GANCHOS
+# ============================================================
+
+with col1:
+
+    st.subheader(
+        "🪝 Ganchos"
+    )
+
+
+    upload_version_g = st.session_state.get(
+        "upload_version_g",
+        0
+    )
+
+
+    uploads_ganchos = st.file_uploader(
+
+        "Subir Ganchos",
+
+        type=[
+            "mp4",
+            "mov"
+        ],
+
+        accept_multiple_files=True,
+
+        key=(
+            f"upload_ganchos_"
+            f"{USUARIO_ID}_"
+            f"{projeto_ativo}_"
+            f"{upload_version_g}"
+        )
+    )
+
+
+    if uploads_ganchos:
+
+        salvar_uploads(
+            uploads_ganchos,
+            PATH_GANCHOS
+        )
+
+
+    ganchos = videos_da_pasta(
+        PATH_GANCHOS
+    )
+
+
+    if ganchos:
+
+        st.success(
+            f"✅ {len(ganchos)} Gancho(s)"
+        )
+
+
+        for video in ganchos:
+
+            st.caption(
+                f"🎬 {video.name}"
+            )
+
+
+    else:
+
+        st.warning(
+            "⚠️ Nenhum vídeo"
+        )
+
+
+    if st.button(
+
+        "🗑️ Limpar Ganchos",
+
+        key=(
+            f"limpar_ganchos_"
+            f"{USUARIO_ID}_"
+            f"{projeto_ativo}"
+        )
+    ):
+
+        for video in videos_da_pasta(
+            PATH_GANCHOS
+        ):
+
+            video.unlink(
+                missing_ok=True
+            )
+
+
+        st.session_state[
+            "upload_version_g"
+        ] = (
+            upload_version_g + 1
+        )
+
+
+        st.rerun()
+
+
+# ============================================================
+# CORPOS
+# ============================================================
+
+with col2:
+
+    st.subheader(
+        "📹 Corpos"
+    )
+
+
+    upload_version_c = st.session_state.get(
+        "upload_version_c",
+        0
+    )
+
+
+    uploads_corpos = st.file_uploader(
+
+        "Subir Corpos",
+
+        type=[
+            "mp4",
+            "mov"
+        ],
+
+        accept_multiple_files=True,
+
+        key=(
+            f"upload_corpos_"
+            f"{USUARIO_ID}_"
+            f"{projeto_ativo}_"
+            f"{upload_version_c}"
+        )
+    )
+
+
+    if uploads_corpos:
+
+        salvar_uploads(
+            uploads_corpos,
+            PATH_CORPOS
+        )
+
+
+    corpos = videos_da_pasta(
+        PATH_CORPOS
+    )
+
+
+    if corpos:
+
+        st.success(
+            f"✅ {len(corpos)} Corpo(s)"
+        )
+
+
+        for video in corpos:
+
+            st.caption(
+                f"🎬 {video.name}"
+            )
+
+
+    else:
+
+        st.warning(
+            "⚠️ Nenhum vídeo"
+        )
+
+
+    if st.button(
+
+        "🗑️ Limpar Corpos",
+
+        key=(
+            f"limpar_corpos_"
+            f"{USUARIO_ID}_"
+            f"{projeto_ativo}"
+        )
+    ):
+
+        for video in videos_da_pasta(
+            PATH_CORPOS
+        ):
+
+            video.unlink(
+                missing_ok=True
+            )
+
+
+        st.session_state[
+            "upload_version_c"
+        ] = (
+            upload_version_c + 1
+        )
+
+
+        st.rerun()
+
+
+# ============================================================
+# CTAS
+# ============================================================
+
+with col3:
+
+    st.subheader(
+        "📣 CTAs"
+    )
+
+
+    upload_version_t = st.session_state.get(
+        "upload_version_t",
+        0
+    )
+
+
+    uploads_ctas = st.file_uploader(
+
+        "Subir CTAs",
+
+        type=[
+            "mp4",
+            "mov"
+        ],
+
+        accept_multiple_files=True,
+
+        key=(
+            f"upload_ctas_"
+            f"{USUARIO_ID}_"
+            f"{projeto_ativo}_"
+            f"{upload_version_t}"
+        )
+    )
+
+
+    if uploads_ctas:
+
+        salvar_uploads(
+            uploads_ctas,
+            PATH_CTAS
+        )
+
+
+    ctas = videos_da_pasta(
+        PATH_CTAS
+    )
+
+
+    if ctas:
+
+        st.success(
+            f"✅ {len(ctas)} CTA(s)"
+        )
+
+
+        for video in ctas:
+
+            st.caption(
+                f"🎬 {video.name}"
+            )
+
+
+    else:
+
+        st.warning(
+            "⚠️ Nenhum vídeo"
+        )
+
+
+    if st.button(
+
+        "🗑️ Limpar CTAs",
+
+        key=(
+            f"limpar_ctas_"
+            f"{USUARIO_ID}_"
+            f"{projeto_ativo}"
+        )
+    ):
+
+        for video in videos_da_pasta(
+            PATH_CTAS
+        ):
+
+            video.unlink(
+                missing_ok=True
+            )
+
+
+        st.session_state[
+            "upload_version_t"
+        ] = (
+            upload_version_t + 1
+        )
+
+
+        st.rerun()
+
+
+# ============================================================
+# ATUALIZAR LISTAS
+# ============================================================
+
+ganchos = videos_da_pasta(
+    PATH_GANCHOS
+)
+
+
+corpos = videos_da_pasta(
+    PATH_CORPOS
+)
+
+
+ctas = videos_da_pasta(
+    PATH_CTAS
+)
+
+
+# ============================================================
+# COMBINAÇÕES
+# ============================================================
+
+quantidade_combinacoes = (
+    len(ganchos)
+    *
+    len(corpos)
+    *
+    len(ctas)
+)
+
+
+st.divider()
+
+
+st.info(
+    f"🎬 "
+    f"{len(ganchos)} Gancho(s) × "
+    f"{len(corpos)} Corpo(s) × "
+    f"{len(ctas)} CTA(s) "
+    f"= {quantidade_combinacoes} vídeo(s)"
+)
+
+
+# ============================================================
+# OPÇÕES
+# ============================================================
+
+st.header(
+    "⚙️ Opções da geração"
+)
+
+
+op1, op2, op3 = st.columns(
+    [1, 1, 2]
+)
+
+
+with op1:
+
+    max_padrao = max(
+        1,
+        min(
+            100,
+            quantidade_combinacoes
+        )
+    )
+
+
+    max_videos = st.number_input(
+
+        "Quantidade máxima de vídeos",
+
+        min_value=1,
+
+        max_value=100,
+
+        value=max_padrao,
+
+        step=1
+    )
+
+
+with op2:
+
+    embaralhar = st.checkbox(
+        "🔀 Embaralhar combinações"
+    )
+
+
+with op3:
+
+    nome_arquivos = st.text_input(
+
+        "Nome dos arquivos",
+
+        value=projeto_ativo,
+
+        key="nome_arquivos"
+    )
+
+
+# ============================================================
+# AVISO
+# ============================================================
+
+if quantidade_combinacoes:
+
+    st.success(
+
+        f"🔥 Serão processados até "
+        f"{min(quantidade_combinacoes, int(max_videos))} vídeo(s)."
+
+    )
+
+else:
+
+    st.warning(
+
+        "Envie pelo menos 1 Gancho, "
+        "1 Corpo e 1 CTA."
+
+    )
+
+
+# ============================================================
+# GERAÇÃO
+# ============================================================
+
+st.header(
+    "2. Geração dos Vídeos"
+)
+
+
+gerar = st.button(
+
+    "🚀 MULTIPLICAR E GERAR TODOS OS VÍDEOS",
+
+    type="primary",
+
+    use_container_width=True,
+
+    disabled=(
+        quantidade_combinacoes == 0
+    )
+)
+
+
+if gerar:
+
+    combinacoes = list(
+        itertools.product(
+            ganchos,
+            corpos,
+            ctas
+        )
+    )
+
+
+    if embaralhar:
+
+        random.shuffle(
+            combinacoes
+        )
+
+
+    combinacoes = combinacoes[
+        :int(max_videos)
+    ]
+
+
+    # Limpar somente o OUTPUT
+    # do projeto atual.
+
+    for antigo in PATH_OUTPUT.glob(
+        "*.mp4"
+    ):
+
+        antigo.unlink(
+            missing_ok=True
+        )
+
+
+    for antigo in PATH_OUTPUT.glob(
+        "*.zip"
+    ):
+
+        antigo.unlink(
+            missing_ok=True
+        )
+
+
+    st.success(
+        f"🔥 Serão gerados "
+        f"{len(combinacoes)} vídeo(s)."
+    )
+
+
+    progresso = st.progress(
+        0
+    )
+
+
+    gerados = []
+
+    erros = []
+
+
+    for indice, combinacao in enumerate(
+
+        combinacoes,
+
+        start=1
+
+    ):
+
+        st.write(
+
+            f"🎬 Processando vídeo "
+            f"{indice}/{len(combinacoes)}..."
+
+        )
+
+
+        nome_saida = (
+
+            f"{safe_name(nome_arquivos)}_"
+
+            f"{indice:03d}.mp4"
+
+        )
+
+
+        arquivo_saida = (
+
+            PATH_OUTPUT
+            /
+            nome_saida
+
+        )
+
+
+        try:
+
+            juntar_videos(
+
+                combinacao,
+
+                arquivo_saida
+
+            )
+
+
+            gerados.append(
+
+                arquivo_saida
+
+            )
+
+
+        except Exception as erro:
+
+            erros.append(
+
+                (
+                    nome_saida,
+                    str(erro)
+                )
+
+            )
+
+
+        progresso.progress(
+
+            indice
+            /
+            len(combinacoes)
+
+        )
+
+
+    if gerados:
+
+        st.success(
+
+            f"🎉 {len(gerados)} vídeo(s) "
+            f"gerado(s) com sucesso!"
+
+        )
+
+
+    if erros:
+
+        st.error(
+
+            f"❌ {len(erros)} vídeo(s) "
+            f"apresentaram erro."
+
+        )
+
+
+        for nome, erro in erros:
+
+            with st.expander(
+
+                f"Detalhes: {nome}"
+
+            ):
+
+                st.code(
+                    erro
+                )
+
+
+    st.rerun()
+
+
+# ============================================================
+# GALERIA
+# ============================================================
+
+videos_prontos = sorted(
+
+    PATH_OUTPUT.glob(
+        "*.mp4"
+    )
+
+)
+
+
+if videos_prontos:
+
+    st.divider()
+
+
+    st.header(
+        "🎬 Galeria de Vídeos Prontos"
+    )
+
+
+    colunas = st.columns(
+        3
+    )
+
+
+    for indice, video in enumerate(
+
+        videos_prontos
+
+    ):
+
+        with colunas[
+            indice % 3
+        ]:
+
+            st.markdown(
+                f"**🎬 {video.name}**"
+            )
+
+
+            st.video(
+                str(video)
+            )
+
+
+            with open(
+                video,
+                "rb"
+            ) as arquivo:
+
+                dados = arquivo.read()
+
+
+            st.download_button(
+
+                "⬇️ Baixar Este Vídeo",
+
+                data=dados,
+
+                file_name=video.name,
+
+                mime="video/mp4",
+
+                use_container_width=True,
+
+                key=(
+
+                    f"download_"
+                    f"{USUARIO_ID}_"
+                    f"{projeto_ativo}_"
+                    f"{indice}"
+
+                )
+
+            )
+
+
+    # ========================================================
+    # ZIP
+    # ========================================================
+
+    arquivo_zip = (
+
+        PATH_OUTPUT
+        /
+        f"{safe_name(projeto_ativo)}_videos.zip"
+
+    )
+
+
+    criar_zip(
+
+        PATH_OUTPUT,
+
+        arquivo_zip
+
+    )
+
+
+    with open(
+
+        arquivo_zip,
+
+        "rb"
+
+    ) as arquivo:
+
+        dados_zip = arquivo.read()
+
+
+    st.download_button(
+
+        "📦 BAIXAR TODOS OS VÍDEOS",
+
+        data=dados_zip,
+
+        file_name=arquivo_zip.name,
+
+        mime="application/zip",
+
+        use_container_width=True,
+
+        key=(
+            f"download_zip_"
+            f"{USUARIO_ID}_"
+            f"{projeto_ativo}"
+        )
+
+    )
+
+
+# ============================================================
+# RODAPÉ
+# ============================================================
+
+st.divider()
+
+
+st.caption(
+    "🎬 AI Creative Engine • "
+    "Gerador de criativos em vídeo"
+)
