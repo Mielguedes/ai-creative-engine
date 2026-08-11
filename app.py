@@ -4,13 +4,13 @@ import os
 import re
 import shutil
 import subprocess
-import random
-import zipfile
 import tempfile
+import zipfile
+import random
+from pathlib import Path
 
-from faster_whisper import WhisperModel
-from supabase import create_client
 import imageio_ffmpeg
+from supabase import create_client, Client
 
 
 # ============================================================
@@ -20,97 +20,79 @@ import imageio_ffmpeg
 st.set_page_config(
     page_title="AI Creative Engine",
     page_icon="🎬",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
-
-
-# ============================================================
-# FFmpeg
-# ============================================================
-
-FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
-
-
-def executar_ffmpeg(comando):
-    """
-    Executa o FFmpeg e retorna:
-    sucesso, mensagem
-    """
-
-    try:
-        resultado = subprocess.run(
-            comando,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
-        )
-
-        if resultado.returncode != 0:
-            return False, resultado.stderr
-
-        return True, resultado.stdout
-
-    except Exception as e:
-        return False, str(e)
 
 
 # ============================================================
 # SUPABASE
 # ============================================================
 
-SUPABASE_URL = st.secrets.get("SUPABASE_URL", "")
-SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", "")
+SUPABASE_URL = str(
+    st.secrets.get("SUPABASE_URL", "")
+).strip()
+
+SUPABASE_KEY = str(
+    st.secrets.get("SUPABASE_KEY", "")
+).strip()
 
 
-if not SUPABASE_URL or not SUPABASE_KEY:
+# Corrige automaticamente caso tenha sido colocado /rest/v1/
+SUPABASE_URL = SUPABASE_URL.rstrip("/")
 
-    st.error("❌ Supabase não configurado.")
+if SUPABASE_URL.endswith("/rest/v1"):
+    SUPABASE_URL = SUPABASE_URL[:-8]
 
-    st.info(
-        "Abra os Secrets do Streamlit e confira se existem "
-        "SUPABASE_URL e SUPABASE_KEY."
-    )
+SUPABASE_URL = SUPABASE_URL.rstrip("/")
 
+
+if not SUPABASE_URL:
+    st.error("❌ SUPABASE_URL não configurada nos Secrets.")
+    st.stop()
+
+
+if not SUPABASE_KEY:
+    st.error("❌ SUPABASE_KEY não configurada nos Secrets.")
+    st.stop()
+
+
+if not SUPABASE_URL.startswith("https://"):
+    st.error("❌ SUPABASE_URL inválida.")
+    st.code(SUPABASE_URL)
     st.stop()
 
 
 try:
-
-    supabase = create_client(
+    supabase: Client = create_client(
         SUPABASE_URL,
         SUPABASE_KEY
     )
 
 except Exception as e:
-
     st.error("❌ Erro ao conectar ao Supabase.")
-
     st.code(str(e))
-
     st.stop()
 
 
 # ============================================================
-# SESSÃO
+# LOGIN SUPABASE
 # ============================================================
 
-if "autenticado" not in st.session_state:
-    st.session_state["autenticado"] = False
+def fazer_login():
 
-if "usuario_email" not in st.session_state:
-    st.session_state["usuario_email"] = ""
-
-
-# ============================================================
-# LOGIN
-# ============================================================
-
-def verificar_login():
-
-    if st.session_state.get("autenticado", False):
+    if st.session_state.get(
+        "autenticado",
+        False
+    ):
         return True
 
-    st.title("🔐 AI Creative Engine")
+    st.markdown(
+        """
+        <h1>🔐 AI Creative Engine</h1>
+        """,
+        unsafe_allow_html=True
+    )
 
     st.caption(
         "Entre para acessar o gerador de vídeos."
@@ -118,13 +100,15 @@ def verificar_login():
 
     email = st.text_input(
         "📧 E-mail",
-        placeholder="Digite seu e-mail"
+        placeholder="Digite seu e-mail",
+        key="login_email"
     )
 
     senha = st.text_input(
         "🔑 Senha",
         type="password",
-        placeholder="Digite sua senha"
+        placeholder="Digite sua senha",
+        key="login_senha"
     )
 
     entrar = st.button(
@@ -135,44 +119,30 @@ def verificar_login():
 
     if entrar:
 
-        if not email.strip():
+        email = email.strip()
 
+        if not email:
             st.warning(
                 "⚠️ Digite seu e-mail."
             )
-
             return False
 
         if not senha:
-
             st.warning(
                 "⚠️ Digite sua senha."
             )
-
             return False
 
         try:
 
             resposta = supabase.auth.sign_in_with_password(
                 {
-                    "email": email.strip(),
+                    "email": email,
                     "password": senha
                 }
             )
 
-            usuario = getattr(
-                resposta,
-                "user",
-                None
-            )
-
-            sessao = getattr(
-                resposta,
-                "session",
-                None
-            )
-
-            if usuario is not None and sessao is not None:
+            if resposta.user:
 
                 st.session_state[
                     "autenticado"
@@ -180,44 +150,504 @@ def verificar_login():
 
                 st.session_state[
                     "usuario_email"
-                ] = email.strip()
+                ] = resposta.user.email
 
                 st.rerun()
 
             else:
 
                 st.error(
-                    "❌ O Supabase não retornou uma sessão."
+                    "❌ Não foi possível autenticar."
                 )
 
-                st.info(
-                    "Verifique se o usuário existe no "
-                    "Authentication > Users."
+        except Exception as erro:
+
+            mensagem = str(erro)
+
+            if (
+                "Invalid login credentials"
+                in mensagem
+            ):
+
+                st.error(
+                    "❌ E-mail ou senha incorretos."
                 )
 
-        except Exception as e:
+            else:
 
-            st.error(
-                "❌ ERRO REAL DO LOGIN:"
-            )
+                st.error(
+                    "❌ ERRO REAL DO LOGIN:"
+                )
 
-            st.code(
-                str(e)
-            )
+                st.code(
+                    mensagem
+                )
 
     return False
 
 
 # ============================================================
-# PARAR SE NÃO ESTIVER LOGADO
+# BLOQUEIA O APP ATÉ FAZER LOGIN
 # ============================================================
 
-if not verificar_login():
+if not fazer_login():
     st.stop()
 
 
 # ============================================================
-# LOGOUT
+# FUNÇÕES AUXILIARES
+# ============================================================
+
+BASE_DIR = Path("projetos")
+BASE_DIR.mkdir(
+    parents=True,
+    exist_ok=True
+)
+
+
+def safe_name(name):
+
+    name = re.sub(
+        r"[^\w\-. ]",
+        "_",
+        str(name),
+        flags=re.UNICODE
+    )
+
+    name = name.strip()
+
+    return name or "arquivo"
+
+
+def listar_projetos():
+
+    return sorted(
+        [
+            p.name
+            for p in BASE_DIR.iterdir()
+            if p.is_dir()
+        ]
+    )
+
+
+def criar_projeto(nome):
+
+    nome = safe_name(nome)
+
+    projeto = BASE_DIR / nome
+
+    for pasta in [
+        "ganchos",
+        "corpos",
+        "ctas",
+        "output"
+    ]:
+
+        (
+            projeto / pasta
+        ).mkdir(
+            parents=True,
+            exist_ok=True
+        )
+
+    return projeto
+
+
+def videos_da_pasta(pasta):
+
+    if not pasta.exists():
+        return []
+
+    return sorted(
+        [
+            arquivo
+            for arquivo in pasta.iterdir()
+            if arquivo.is_file()
+            and arquivo.suffix.lower()
+            in [".mp4", ".mov"]
+        ]
+    )
+
+
+def salvar_uploads(arquivos, pasta):
+
+    pasta.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    salvos = []
+
+    for arquivo in arquivos or []:
+
+        if arquivo is None:
+            continue
+
+        extensao = Path(
+            arquivo.name
+        ).suffix.lower()
+
+        if extensao not in [
+            ".mp4",
+            ".mov"
+        ]:
+            continue
+
+        nome_base = safe_name(
+            Path(
+                arquivo.name
+            ).stem
+        )
+
+        destino = (
+            pasta
+            / f"{nome_base}{extensao}"
+        )
+
+        try:
+
+            dados = arquivo.getbuffer()
+
+            with open(
+                destino,
+                "wb"
+            ) as f:
+
+                f.write(dados)
+
+            salvos.append(destino)
+
+        except Exception as erro:
+
+            st.error(
+                f"Erro ao salvar {arquivo.name}: {erro}"
+            )
+
+    return salvos
+
+
+def limpar_estado_upload():
+
+    chaves = list(
+        st.session_state.keys()
+    )
+
+    for chave in chaves:
+
+        if chave.startswith(
+            "upload_"
+        ):
+
+            try:
+                del st.session_state[chave]
+            except Exception:
+                pass
+
+
+# ============================================================
+# FFMPEG
+# ============================================================
+
+def executar_ffmpeg(argumentos):
+
+    ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+
+    resultado = subprocess.run(
+        [ffmpeg] + argumentos,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True
+    )
+
+    if resultado.returncode != 0:
+
+        raise RuntimeError(
+            resultado.stderr[-5000:]
+        )
+
+    return resultado
+
+
+# ============================================================
+# NORMALIZAR VÍDEO
+# ============================================================
+
+def normalizar_video(
+    origem,
+    destino
+):
+
+    filtro = (
+        "scale=1080:1920:"
+        "force_original_aspect_ratio=decrease,"
+        "pad=1080:1920:"
+        "(ow-iw)/2:"
+        "(oh-ih)/2,"
+        "setsar=1,"
+        "fps=30"
+    )
+
+    argumentos = [
+        "-y",
+        "-i",
+        str(origem),
+
+        "-vf",
+        filtro,
+
+        "-c:v",
+        "libx264",
+
+        "-preset",
+        "veryfast",
+
+        "-crf",
+        "23",
+
+        "-pix_fmt",
+        "yuv420p",
+
+        "-c:a",
+        "aac",
+
+        "-b:a",
+        "128k",
+
+        "-ar",
+        "48000",
+
+        "-ac",
+        "2",
+
+        "-movflags",
+        "+faststart",
+
+        str(destino)
+    ]
+
+    try:
+
+        executar_ffmpeg(
+            argumentos
+        )
+
+    except Exception:
+
+        argumentos = [
+            "-y",
+
+            "-i",
+            str(origem),
+
+            "-f",
+            "lavfi",
+
+            "-i",
+            "anullsrc="
+            "channel_layout=stereo:"
+            "sample_rate=48000",
+
+            "-vf",
+            filtro,
+
+            "-map",
+            "0:v:0",
+
+            "-map",
+            "1:a:0",
+
+            "-shortest",
+
+            "-c:v",
+            "libx264",
+
+            "-preset",
+            "veryfast",
+
+            "-crf",
+            "23",
+
+            "-pix_fmt",
+            "yuv420p",
+
+            "-c:a",
+            "aac",
+
+            "-b:a",
+            "128k",
+
+            "-ar",
+            "48000",
+
+            "-ac",
+            "2",
+
+            "-movflags",
+            "+faststart",
+
+            str(destino)
+        ]
+
+        executar_ffmpeg(
+            argumentos
+        )
+
+
+# ============================================================
+# JUNTAR 3 VÍDEOS
+# ============================================================
+
+def juntar_videos(
+    videos,
+    arquivo_saida
+):
+
+    with tempfile.TemporaryDirectory() as temp:
+
+        temp_path = Path(temp)
+
+        normalizados = []
+
+        for indice, video in enumerate(
+            videos
+        ):
+
+            destino = (
+                temp_path
+                / f"clip_{indice:03d}.mp4"
+            )
+
+            normalizar_video(
+                video,
+                destino
+            )
+
+            normalizados.append(
+                destino
+            )
+
+        lista = (
+            temp_path
+            / "lista.txt"
+        )
+
+        with open(
+            lista,
+            "w",
+            encoding="utf-8"
+        ) as arquivo:
+
+            for video in normalizados:
+
+                caminho = (
+                    str(video)
+                    .replace(
+                        "\\",
+                        "/"
+                    )
+                )
+
+                arquivo.write(
+                    f"file '{caminho}'\n"
+                )
+
+        argumentos = [
+            "-y",
+
+            "-f",
+            "concat",
+
+            "-safe",
+            "0",
+
+            "-i",
+            str(lista),
+
+            "-c",
+            "copy",
+
+            "-movflags",
+            "+faststart",
+
+            str(arquivo_saida)
+        ]
+
+        executar_ffmpeg(
+            argumentos
+        )
+
+
+# ============================================================
+# ZIP
+# ============================================================
+
+def criar_zip(
+    pasta_saida,
+    arquivo_zip
+):
+
+    videos = sorted(
+        pasta_saida.glob(
+            "*.mp4"
+        )
+    )
+
+    with zipfile.ZipFile(
+        arquivo_zip,
+        "w",
+        zipfile.ZIP_DEFLATED
+    ) as zipado:
+
+        for video in videos:
+
+            zipado.write(
+                video,
+                arcname=video.name
+            )
+
+
+# ============================================================
+# CRIAR PROJETO PADRÃO
+# ============================================================
+
+projetos = listar_projetos()
+
+if not projetos:
+
+    criar_projeto(
+        "NOVO_PROJETO"
+    )
+
+    projetos = listar_projetos()
+
+
+# ============================================================
+# SIDEBAR
+# ============================================================
+
+st.sidebar.title(
+    "📁 Projetos"
+)
+
+
+# ============================================================
+# USUÁRIO LOGADO
+# ============================================================
+
+email_logado = st.session_state.get(
+    "usuario_email",
+    ""
+)
+
+if email_logado:
+
+    st.sidebar.caption(
+        f"👤 {email_logado}"
+    )
+
+
+# ============================================================
+# SAIR
 # ============================================================
 
 if st.sidebar.button(
@@ -226,7 +656,9 @@ if st.sidebar.button(
 ):
 
     try:
+
         supabase.auth.sign_out()
+
     except Exception:
         pass
 
@@ -243,211 +675,76 @@ if st.sidebar.button(
 
 
 # ============================================================
-# PASTA PRINCIPAL
+# NOVO PROJETO
 # ============================================================
-
-BASE_DIR = os.path.abspath(
-    "projetos"
-)
-
-os.makedirs(
-    BASE_DIR,
-    exist_ok=True
-)
-
-
-# ============================================================
-# LISTAR PROJETOS
-# ============================================================
-
-def listar_projetos():
-
-    return sorted(
-        [
-            nome
-            for nome in os.listdir(BASE_DIR)
-            if os.path.isdir(
-                os.path.join(
-                    BASE_DIR,
-                    nome
-                )
-            )
-        ]
-    )
-
-
-# ============================================================
-# LIMPAR NOME
-# ============================================================
-
-def limpar_nome(nome):
-
-    nome = nome.strip()
-
-    nome = re.sub(
-        r"[^\w\s-]",
-        "",
-        nome
-    )
-
-    nome = nome.replace(
-        " ",
-        "_"
-    )
-
-    return nome
-
-
-# ============================================================
-# CRIAR PROJETO
-# ============================================================
-
-st.sidebar.title("📁 Projetos")
 
 novo_projeto = st.sidebar.text_input(
-    "Novo Projeto:"
+    "Novo Projeto",
+    key="novo_projeto_input"
 )
+
 
 if st.sidebar.button(
     "➕ Criar Projeto",
     use_container_width=True
 ):
 
-    nome_limpo = limpar_nome(
-        novo_projeto
-    )
+    if novo_projeto.strip():
 
-    if not nome_limpo:
-
-        st.sidebar.warning(
-            "Digite um nome para o projeto."
+        nome = safe_name(
+            novo_projeto.strip()
         )
 
-    else:
-
-        caminho_novo = os.path.join(
-            BASE_DIR,
-            nome_limpo
+        criar_projeto(
+            nome
         )
 
-        os.makedirs(
-            os.path.join(
-                caminho_novo,
-                "ganchos"
-            ),
-            exist_ok=True
-        )
-
-        os.makedirs(
-            os.path.join(
-                caminho_novo,
-                "corpos"
-            ),
-            exist_ok=True
-        )
-
-        os.makedirs(
-            os.path.join(
-                caminho_novo,
-                "ctas"
-            ),
-            exist_ok=True
-        )
-
-        os.makedirs(
-            os.path.join(
-                caminho_novo,
-                "output"
-            ),
-            exist_ok=True
-        )
-
-        st.sidebar.success(
-            f"Projeto '{nome_limpo}' criado."
-        )
+        st.session_state[
+            "projeto_ativo"
+        ] = nome
 
         st.rerun()
 
+    else:
+
+        st.sidebar.warning(
+            "Digite o nome do projeto."
+        )
+
 
 # ============================================================
-# PROJETOS
+# PROJETO ATIVO
 # ============================================================
-
-st.sidebar.divider()
 
 projetos = listar_projetos()
 
+projeto_padrao = st.session_state.get(
+    "projeto_ativo",
+    projetos[0]
+)
 
-if not projetos:
+if projeto_padrao not in projetos:
 
-    st.warning(
-        "⚠️ Nenhum projeto criado."
+    projeto_padrao = projetos[0]
+
+
+projeto_ativo = st.sidebar.selectbox(
+    "Selecione o Projeto Ativo",
+    projetos,
+    index=projetos.index(
+        projeto_padrao
     )
-
-    st.info(
-        "Crie um projeto no menu lateral."
-    )
-
-    st.stop()
-
-
-# ============================================================
-# PROJETO ATUAL
-# ============================================================
-
-projeto_atual = st.sidebar.selectbox(
-    "Selecione o Projeto Ativo:",
-    projetos
 )
 
 
-PROJ_PATH = os.path.join(
-    BASE_DIR,
-    projeto_atual
-)
-
-
-PATH_GANCHOS = os.path.join(
-    PROJ_PATH,
-    "ganchos"
-)
-
-PATH_CORPOS = os.path.join(
-    PROJ_PATH,
-    "corpos"
-)
-
-PATH_CTAS = os.path.join(
-    PROJ_PATH,
-    "ctas"
-)
-
-PATH_OUTPUT = os.path.join(
-    PROJ_PATH,
-    "output"
-)
-
-
-# Garantir pastas
-
-for pasta in [
-    PATH_GANCHOS,
-    PATH_CORPOS,
-    PATH_CTAS,
-    PATH_OUTPUT
-]:
-
-    os.makedirs(
-        pasta,
-        exist_ok=True
-    )
+st.session_state[
+    "projeto_ativo"
+] = projeto_ativo
 
 
 # ============================================================
 # DELETAR PROJETO
 # ============================================================
-
-st.sidebar.divider()
 
 if st.sidebar.button(
     "🗑️ Deletar Projeto Atual",
@@ -455,192 +752,83 @@ if st.sidebar.button(
     use_container_width=True
 ):
 
-    try:
-
-        if os.path.exists(
-            PROJ_PATH
-        ):
-
-            shutil.rmtree(
-                PROJ_PATH
-            )
-
-        st.session_state.pop(
-            "projeto_confirmado",
-            None
-        )
-
-        st.sidebar.success(
-            f"Projeto '{projeto_atual}' deletado."
-        )
-
-        st.rerun()
-
-    except Exception as e:
-
-        st.sidebar.error(
-            "❌ Não foi possível deletar."
-        )
-
-        st.code(
-            str(e)
-        )
-
-
-# ============================================================
-# CABEÇALHO
-# ============================================================
-
-st.title(
-    f"🎬 AI Creative Engine — {projeto_atual}"
-)
-
-st.caption(
-    f"Usuário: {st.session_state.get('usuario_email', '')}"
-)
-
-st.caption(
-    "Multiplicador Modular de Vídeos"
-)
-
-st.divider()
-
-
-# ============================================================
-# FUNÇÕES DE ARQUIVOS
-# ============================================================
-
-EXTENSOES_VIDEO = (
-    ".mp4",
-    ".mov",
-    ".m4v"
-)
-
-
-def listar_videos(pasta):
-
-    if not os.path.exists(pasta):
-        return []
-
-    return sorted(
-        [
-            f
-            for f in os.listdir(pasta)
-            if f.lower().endswith(
-                EXTENSOES_VIDEO
-            )
-        ]
+    caminho_projeto = (
+        BASE_DIR
+        / safe_name(projeto_ativo)
     )
 
-
-def salvar_uploads(
-    arquivos,
-    destino
-):
-
-    os.makedirs(
-        destino,
-        exist_ok=True
-    )
-
-    nomes_salvos = []
-
-    for arquivo in arquivos:
-
-        nome = limpar_nome(
-            os.path.splitext(
-                arquivo.name
-            )[0]
-        )
-
-        extensao = os.path.splitext(
-            arquivo.name
-        )[1].lower()
-
-        nome_final = (
-            f"{nome}{extensao}"
-        )
-
-        caminho = os.path.join(
-            destino,
-            nome_final
-        )
-
-        contador = 1
-
-        while os.path.exists(caminho):
-
-            nome_final = (
-                f"{nome}_{contador}"
-                f"{extensao}"
-            )
-
-            caminho = os.path.join(
-                destino,
-                nome_final
-            )
-
-            contador += 1
-
-        with open(
-            caminho,
-            "wb"
-        ) as f:
-
-            f.write(
-                arquivo.getbuffer()
-            )
-
-        nomes_salvos.append(
-            nome_final
-        )
-
-    return nomes_salvos
-
-
-def limpar_pasta(pasta):
-
-    if not os.path.exists(pasta):
-        return
-
-    for nome in os.listdir(pasta):
-
-        caminho = os.path.join(
-            pasta,
-            nome
-        )
+    if caminho_projeto.exists():
 
         try:
 
-            if os.path.isfile(
-                caminho
-            ) or os.path.islink(
-                caminho
-            ):
+            shutil.rmtree(
+                caminho_projeto
+            )
 
-                os.remove(
-                    caminho
-                )
+        except Exception as erro:
 
-            elif os.path.isdir(
-                caminho
-            ):
+            st.sidebar.error(
+                f"Erro ao deletar: {erro}"
+            )
 
-                shutil.rmtree(
-                    caminho
-                )
+            st.stop()
 
-        except Exception:
-            pass
+    limpar_estado_upload()
+
+    st.session_state.pop(
+        "projeto_ativo",
+        None
+    )
+
+    st.rerun()
 
 
 # ============================================================
-# GERENCIADOR DE VÍDEOS
+# ESTRUTURA
 # ============================================================
 
-st.subheader(
+PROJETO = criar_projeto(
+    projeto_ativo
+)
+
+PATH_GANCHOS = (
+    PROJETO / "ganchos"
+)
+
+PATH_CORPOS = (
+    PROJETO / "corpos"
+)
+
+PATH_CTAS = (
+    PROJETO / "ctas"
+)
+
+PATH_OUTPUT = (
+    PROJETO / "output"
+)
+
+
+# ============================================================
+# TÍTULO
+# ============================================================
+
+st.title(
+    "🎬 AI Creative Engine"
+)
+
+st.caption(
+    "Multiplicador modular de vídeos • 9:16 • Geração local"
+)
+
+
+# ============================================================
+# GERENCIAMENTO
+# ============================================================
+
+st.header(
     "1. Gerenciamento dos Blocos de Vídeo"
 )
+
 
 col1, col2, col3 = st.columns(3)
 
@@ -651,73 +839,62 @@ col1, col2, col3 = st.columns(3)
 
 with col1:
 
-    st.markdown(
-        "### 🪝 Ganchos"
+    st.subheader(
+        "🪝 Ganchos"
     )
 
-    upload_ganchos = st.file_uploader(
+    uploads_ganchos = st.file_uploader(
         "Subir Ganchos",
-        type=[
-            "mp4",
-            "mov",
-            "m4v"
-        ],
+        type=["mp4", "mov"],
         accept_multiple_files=True,
-        key=f"gancho_{projeto_atual}"
+        key=f"upload_ganchos_{projeto_ativo}"
     )
 
-    if upload_ganchos:
+    if uploads_ganchos:
 
         salvar_uploads(
-            upload_ganchos,
+            uploads_ganchos,
             PATH_GANCHOS
         )
 
-        st.success(
-            "Vídeo(s) salvo(s)!"
-        )
-
-    arquivos_h = listar_videos(
+    ganchos = videos_da_pasta(
         PATH_GANCHOS
     )
 
-    if arquivos_h:
+    if ganchos:
 
         st.success(
-            f"✅ {len(arquivos_h)} Gancho(s)"
+            f"✅ {len(ganchos)} Gancho(s)"
         )
 
-        for nome in arquivos_h:
+        for video in ganchos:
 
             st.caption(
-                f"🎬 {nome}"
+                f"🎬 {video.name}"
             )
-
-            caminho = os.path.join(
-                PATH_GANCHOS,
-                nome
-            )
-
-            st.video(
-                caminho
-            )
-
-        if st.button(
-            "🗑️ Limpar Ganchos",
-            key=f"limpar_h_{projeto_atual}"
-        ):
-
-            limpar_pasta(
-                PATH_GANCHOS
-            )
-
-            st.rerun()
 
     else:
 
         st.warning(
             "⚠️ Nenhum vídeo"
         )
+
+    if st.button(
+        "🗑️ Limpar Ganchos",
+        key="limpar_ganchos"
+    ):
+
+        for video in videos_da_pasta(
+            PATH_GANCHOS
+        ):
+
+            video.unlink(
+                missing_ok=True
+            )
+
+        limpar_estado_upload()
+
+        st.rerun()
 
 
 # ============================================================
@@ -726,73 +903,62 @@ with col1:
 
 with col2:
 
-    st.markdown(
-        "### 📹 Corpos"
+    st.subheader(
+        "📹 Corpos"
     )
 
-    upload_corpos = st.file_uploader(
+    uploads_corpos = st.file_uploader(
         "Subir Corpos",
-        type=[
-            "mp4",
-            "mov",
-            "m4v"
-        ],
+        type=["mp4", "mov"],
         accept_multiple_files=True,
-        key=f"corpo_{projeto_atual}"
+        key=f"upload_corpos_{projeto_ativo}"
     )
 
-    if upload_corpos:
+    if uploads_corpos:
 
         salvar_uploads(
-            upload_corpos,
+            uploads_corpos,
             PATH_CORPOS
         )
 
-        st.success(
-            "Vídeo(s) salvo(s)!"
-        )
-
-    arquivos_m = listar_videos(
+    corpos = videos_da_pasta(
         PATH_CORPOS
     )
 
-    if arquivos_m:
+    if corpos:
 
         st.success(
-            f"✅ {len(arquivos_m)} Corpo(s)"
+            f"✅ {len(corpos)} Corpo(s)"
         )
 
-        for nome in arquivos_m:
+        for video in corpos:
 
             st.caption(
-                f"🎬 {nome}"
+                f"🎬 {video.name}"
             )
-
-            caminho = os.path.join(
-                PATH_CORPOS,
-                nome
-            )
-
-            st.video(
-                caminho
-            )
-
-        if st.button(
-            "🗑️ Limpar Corpos",
-            key=f"limpar_m_{projeto_atual}"
-        ):
-
-            limpar_pasta(
-                PATH_CORPOS
-            )
-
-            st.rerun()
 
     else:
 
         st.warning(
             "⚠️ Nenhum vídeo"
         )
+
+    if st.button(
+        "🗑️ Limpar Corpos",
+        key="limpar_corpos"
+    ):
+
+        for video in videos_da_pasta(
+            PATH_CORPOS
+        ):
+
+            video.unlink(
+                missing_ok=True
+            )
+
+        limpar_estado_upload()
+
+        st.rerun()
 
 
 # ============================================================
@@ -801,67 +967,39 @@ with col2:
 
 with col3:
 
-    st.markdown(
-        "### 📢 CTAs"
+    st.subheader(
+        "📣 CTAs"
     )
 
-    upload_ctas = st.file_uploader(
+    uploads_ctas = st.file_uploader(
         "Subir CTAs",
-        type=[
-            "mp4",
-            "mov",
-            "m4v"
-        ],
+        type=["mp4", "mov"],
         accept_multiple_files=True,
-        key=f"cta_{projeto_atual}"
+        key=f"upload_ctas_{projeto_ativo}"
     )
 
-    if upload_ctas:
+    if uploads_ctas:
 
         salvar_uploads(
-            upload_ctas,
+            uploads_ctas,
             PATH_CTAS
         )
 
-        st.success(
-            "Vídeo(s) salvo(s)!"
-        )
-
-    arquivos_c = listar_videos(
+    ctas = videos_da_pasta(
         PATH_CTAS
     )
 
-    if arquivos_c:
+    if ctas:
 
         st.success(
-            f"✅ {len(arquivos_c)} CTA(s)"
+            f"✅ {len(ctas)} CTA(s)"
         )
 
-        for nome in arquivos_c:
+        for video in ctas:
 
             st.caption(
-                f"🎬 {nome}"
+                f"🎬 {video.name}"
             )
-
-            caminho = os.path.join(
-                PATH_CTAS,
-                nome
-            )
-
-            st.video(
-                caminho
-            )
-
-        if st.button(
-            "🗑️ Limpar CTAs",
-            key=f"limpar_c_{projeto_atual}"
-        ):
-
-            limpar_pasta(
-                PATH_CTAS
-            )
-
-            st.rerun()
 
     else:
 
@@ -869,647 +1007,194 @@ with col3:
             "⚠️ Nenhum vídeo"
         )
 
+    if st.button(
+        "🗑️ Limpar CTAs",
+        key="limpar_ctas"
+    ):
+
+        for video in videos_da_pasta(
+            PATH_CTAS
+        ):
+
+            video.unlink(
+                missing_ok=True
+            )
+
+        limpar_estado_upload()
+
+        st.rerun()
+
 
 # ============================================================
-# COMBINAÇÕES
+# ATUALIZAR LISTAS
 # ============================================================
 
-total_variacoes = (
-    len(arquivos_h)
-    * len(arquivos_m)
-    * len(arquivos_c)
+ganchos = videos_da_pasta(
+    PATH_GANCHOS
+)
+
+corpos = videos_da_pasta(
+    PATH_CORPOS
+)
+
+ctas = videos_da_pasta(
+    PATH_CTAS
 )
 
 
-if total_variacoes:
+# ============================================================
+# COMBINAÇÃO
+# ============================================================
 
-    st.info(
-        f"📊 Combinação base: "
-        f"**{len(arquivos_h)}** Gancho(s) × "
-        f"**{len(arquivos_m)}** Corpo(s) × "
-        f"**{len(arquivos_c)}** CTA(s) = "
-        f"**{total_variacoes} vídeo(s)**"
-    )
-
-else:
-
-    st.warning(
-        "⚠️ Para gerar vídeos, coloque pelo menos "
-        "1 Gancho, 1 Corpo e 1 CTA."
-    )
+quantidade_combinacoes = (
+    len(ganchos)
+    *
+    len(corpos)
+    *
+    len(ctas)
+)
 
 
 st.divider()
+
+st.info(
+    f"🎬 "
+    f"{len(ganchos)} Gancho(s) × "
+    f"{len(corpos)} Corpo(s) × "
+    f"{len(ctas)} CTA(s) "
+    f"= {quantidade_combinacoes} vídeo(s)"
+)
 
 
 # ============================================================
 # OPÇÕES
 # ============================================================
 
-st.subheader(
-    "2. Estilização & Modificadores"
+st.header(
+    "⚙️ Opções da geração"
 )
+
+
+op1, op2, op3 = st.columns(
+    [1, 1, 2]
+)
+
+
+with op1:
+
+    max_videos = st.number_input(
+        "Quantidade máxima de vídeos",
+        min_value=1,
+        max_value=100,
+        value=max(
+            1,
+            min(
+                100,
+                quantidade_combinacoes
+            )
+        ),
+        step=1
+    )
+
+
+with op2:
+
+    embaralhar = st.checkbox(
+        "🔀 Embaralhar combinações"
+    )
+
+
+with op3:
+
+    nome_arquivos = st.text_input(
+        "Nome dos arquivos",
+        value=projeto_ativo
+    )
 
 
 # ============================================================
-# ENCODER
+# AVISO
 # ============================================================
 
-st.markdown(
-    "#### ⚡ Renderização"
-)
+if quantidade_combinacoes:
 
-tipo_gpu = st.selectbox(
-    "Escolha o modo de renderização:",
-    [
-        "CPU Padrão — Recomendado",
-        "NVIDIA NVENC",
-        "AMD AMF",
-        "Intel QSV"
-    ]
-)
-
-
-if tipo_gpu == "NVIDIA NVENC":
-
-    encoder = "h264_nvenc"
-
-elif tipo_gpu == "AMD AMF":
-
-    encoder = "h264_amf"
-
-elif tipo_gpu == "Intel QSV":
-
-    encoder = "h264_qsv"
+    st.success(
+        f"🔥 Serão processados até "
+        f"{min(quantidade_combinacoes, int(max_videos))} vídeo(s)."
+    )
 
 else:
-
-    encoder = "libx264"
-
-
-if encoder != "libx264":
 
     st.warning(
-        "⚠️ No Streamlit Cloud, recomendamos "
-        "CPU Padrão. GPU geralmente não está disponível."
+        "Envie pelo menos 1 Gancho, "
+        "1 Corpo e 1 CTA."
     )
 
 
 # ============================================================
-# ESPELHAMENTO
+# GERAÇÃO
 # ============================================================
 
-espelhar = st.checkbox(
-    "🪞 Espelhamento aleatório por bloco",
-    value=False
+st.header(
+    "2. Geração dos Vídeos"
 )
 
 
-# ============================================================
-# ANTI DUPLICIDADE
-# ============================================================
-
-anti_dup = st.checkbox(
-    "🛡️ Aplicar pequena variação visual",
-    value=True
-)
-
-
-# ============================================================
-# HOOK
-# ============================================================
-
-st.markdown(
-    "#### 📌 Hook"
-)
-
-hook_ativo = st.checkbox(
-    "Ativar Hook no topo",
-    value=False
-)
-
-
-if hook_ativo:
-
-    texto_manchete = st.text_area(
-        "Frases do Hook — uma por linha",
-        placeholder=(
-            "Exemplo:\n"
-            "VOCÊ AINDA FAZ ISSO?\n"
-            "OLHA ESSA DIFERENÇA!\n"
-            "EU NÃO ACREDITAVA!"
-        ),
-        height=120
-    )
-
-    posicao_hook = st.slider(
-        "Posição do Hook",
-        50,
-        1000,
-        200,
-        10
-    )
-
-    tamanho_hook = st.number_input(
-        "Tamanho do Hook",
-        30,
-        200,
-        80,
-        5
-    )
-
-else:
-
-    texto_manchete = ""
-
-    posicao_hook = 200
-
-    tamanho_hook = 80
-
-
-# ============================================================
-# LEGENDAS
-# ============================================================
-
-st.markdown(
-    "#### 🗣️ Legendas Automáticas"
-)
-
-legenda_ativa = st.checkbox(
-    "Ativar legendas automáticas",
-    value=False
-)
-
-
-if legenda_ativa:
-
-    posicao_legenda = st.slider(
-        "Altura da legenda",
-        100,
-        1200,
-        450,
-        20
-    )
-
-    tamanho_legenda = st.number_input(
-        "Tamanho da legenda",
-        40,
-        150,
-        80,
-        5
-    )
-
-else:
-
-    posicao_legenda = 450
-    tamanho_legenda = 80
-
-
-# ============================================================
-# FUNÇÃO PARA FORMATAR TEMPO ASS
-# ============================================================
-
-def formatar_ass(segundos):
-
-    horas = int(
-        segundos // 3600
-    )
-
-    minutos = int(
-        (segundos % 3600) // 60
-    )
-
-    segundos_restantes = (
-        segundos % 60
-    )
-
-    return (
-        f"{horas}:"
-        f"{minutos:02d}:"
-        f"{segundos_restantes:05.2f}"
-    )
-
-
-# ============================================================
-# GERAR HOOK ASS
-# ============================================================
-
-def gerar_hook_ass(
-    texto,
-    caminho
-):
-
-    conteudo = f"""[Script Info]
-ScriptType: v4.00+
-PlayResX: 1080
-PlayResY: 1920
-
-[V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Hook,Arial,{tamanho_hook},&H00000000,&H00000000,&H00FFFFFF,&HFFFFFFFF,-1,0,0,0,100,100,0,0,3,15,0,8,30,30,{posicao_hook},1
-
-[Events]
-Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-Dialogue: 0,0:00:00.00,0:00:05.00,Hook,,0,0,0,,{texto}
-"""
-
-    with open(
-        caminho,
-        "w",
-        encoding="utf-8"
-    ) as f:
-
-        f.write(
-            conteudo
-        )
-
-
-# ============================================================
-# GERAR LEGENDAS
-# ============================================================
-
-def gerar_legendas(
-    video,
-    caminho_ass
-):
-
-    try:
-
-        model = WhisperModel(
-            "small",
-            device="cpu",
-            compute_type="int8"
-        )
-
-        segments, _ = model.transcribe(
-            video,
-            word_timestamps=True,
-            language="pt"
-        )
-
-        conteudo = """[Script Info]
-ScriptType: v4.00+
-PlayResX: 1080
-PlayResY: 1920
-
-[V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Legenda,Arial,80,&H00FFFFFF,&H0000FFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,2,2,30,30,450,1
-
-[Events]
-Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-"""
-
-        for segment in segments:
-
-            if not segment.words:
-                continue
-
-            for palavra in segment.words:
-
-                texto = (
-                    palavra.word
-                    .strip()
-                    .upper()
-                )
-
-                if not texto:
-                    continue
-
-                inicio = formatar_ass(
-                    palavra.start
-                )
-
-                fim = formatar_ass(
-                    palavra.end
-                )
-
-                conteudo += (
-                    f"Dialogue: 0,"
-                    f"{inicio},"
-                    f"{fim},"
-                    f"Legenda,,0,0,0,,"
-                    f"{texto}\n"
-                )
-
-        with open(
-            caminho_ass,
-            "w",
-            encoding="utf-8"
-        ) as f:
-
-            f.write(
-                conteudo
-            )
-
-        return True
-
-    except Exception as e:
-
-        st.warning(
-            "⚠️ Não foi possível gerar "
-            f"as legendas: {e}"
-        )
-
-        return False
-
-
-# ============================================================
-# NORMALIZAR VÍDEO
-# ============================================================
-
-def normalizar_video(
-    entrada,
-    saida,
-    espelhar_video=False
-):
-
-    filtro = (
-        "scale=1080:1920:"
-        "force_original_aspect_ratio=decrease,"
-        "pad=1080:1920:"
-        "(ow-iw)/2:(oh-ih)/2,"
-        "setsar=1"
-    )
-
-    if espelhar_video:
-
-        filtro += ",hflip"
-
-    comando = [
-        FFMPEG,
-        "-y",
-        "-i",
-        entrada,
-        "-vf",
-        filtro,
-        "-r",
-        "30",
-        "-c:v",
-        encoder,
-        "-pix_fmt",
-        "yuv420p",
-        "-c:a",
-        "aac",
-        "-b:a",
-        "128k",
-        "-ar",
-        "44100",
-        saida
-    ]
-
-    return executar_ffmpeg(
-        comando
-    )
-
-
-# ============================================================
-# CONCATENAR
-# ============================================================
-
-def concatenar_videos(
-    videos,
-    saida
-):
-
-    lista = os.path.join(
-        PROJ_PATH,
-        f"concat_{random.randint(100000,999999)}.txt"
-    )
-
-    try:
-
-        with open(
-            lista,
-            "w",
-            encoding="utf-8"
-        ) as f:
-
-            for video in videos:
-
-                caminho = (
-                    video
-                    .replace(
-                        "\\",
-                        "/"
-                    )
-                    .replace(
-                        "'",
-                        "'\\''"
-                    )
-                )
-
-                f.write(
-                    f"file '{caminho}'\n"
-                )
-
-        comando = [
-            FFMPEG,
-            "-y",
-            "-f",
-            "concat",
-            "-safe",
-            "0",
-            "-i",
-            lista,
-            "-c:v",
-            encoder,
-            "-pix_fmt",
-            "yuv420p",
-            "-c:a",
-            "aac",
-            "-b:a",
-            "128k",
-            saida
-        ]
-
-        sucesso, erro = executar_ffmpeg(
-            comando
-        )
-
-        return sucesso, erro
-
-    finally:
-
-        if os.path.exists(
-            lista
-        ):
-
-            try:
-                os.remove(
-                    lista
-                )
-            except Exception:
-                pass
-
-
-# ============================================================
-# APLICAR FILTRO VISUAL
-# ============================================================
-
-def aplicar_variacao_visual(
-    entrada,
-    saida
-):
-
-    brilho = round(
-        random.uniform(
-            -0.015,
-            0.025
-        ),
-        3
-    )
-
-    contraste = round(
-        random.uniform(
-            1.01,
-            1.06
-        ),
-        3
-    )
-
-    saturacao = round(
-        random.uniform(
-            0.97,
-            1.06
-        ),
-        3
-    )
-
-    filtro = (
-        f"eq="
-        f"brightness={brilho}:"
-        f"contrast={contraste}:"
-        f"saturation={saturacao}"
-    )
-
-    comando = [
-        FFMPEG,
-        "-y",
-        "-i",
-        entrada,
-        "-vf",
-        filtro,
-        "-c:v",
-        encoder,
-        "-pix_fmt",
-        "yuv420p",
-        "-c:a",
-        "aac",
-        "-b:a",
-        "128k",
-        saida
-    ]
-
-    return executar_ffmpeg(
-        comando
-    )
-
-
-# ============================================================
-# APLICAR ASS
-# ============================================================
-
-def aplicar_ass(
-    entrada,
-    ass,
-    saida
-):
-
-    caminho = (
-        ass
-        .replace(
-            "\\",
-            "/"
-        )
-        .replace(
-            ":",
-            "\\:"
-        )
-    )
-
-    filtro = (
-        f"subtitles='{caminho}'"
-    )
-
-    comando = [
-        FFMPEG,
-        "-y",
-        "-i",
-        entrada,
-        "-vf",
-        filtro,
-        "-c:v",
-        encoder,
-        "-pix_fmt",
-        "yuv420p",
-        "-c:a",
-        "aac",
-        "-b:a",
-        "128k",
-        saida
-    ]
-
-    return executar_ffmpeg(
-        comando
-    )
-
-
-# ============================================================
-# GERAR VÍDEOS
-# ============================================================
-
-st.divider()
-
-st.subheader(
-    "3. Geração dos Vídeos"
-)
-
-
-if st.button(
+gerar = st.button(
     "🚀 MULTIPLICAR E GERAR TODOS OS VÍDEOS",
     type="primary",
-    use_container_width=True
-):
+    use_container_width=True,
+    disabled=(
+        quantidade_combinacoes == 0
+    )
+)
 
-    arquivos_h = listar_videos(
-        PATH_GANCHOS
+
+if gerar:
+
+    combinacoes = list(
+        itertools.product(
+            ganchos,
+            corpos,
+            ctas
+        )
     )
 
-    arquivos_m = listar_videos(
-        PATH_CORPOS
-    )
+    if embaralhar:
 
-    arquivos_c = listar_videos(
-        PATH_CTAS
-    )
+        random.shuffle(
+            combinacoes
+        )
 
-    if (
-        not arquivos_h
-        or not arquivos_m
-        or not arquivos_c
+    combinacoes = combinacoes[
+        :int(max_videos)
+    ]
+
+
+    # ----------------------------------------
+    # LIMPAR OUTPUT
+    # ----------------------------------------
+
+    for antigo in PATH_OUTPUT.glob(
+        "*.mp4"
     ):
 
-        st.error(
-            "❌ Você precisa ter pelo menos "
-            "1 Gancho + 1 Corpo + 1 CTA."
+        antigo.unlink(
+            missing_ok=True
         )
 
-        st.stop()
+    for antigo in PATH_OUTPUT.glob(
+        "*.zip"
+    ):
 
-
-    combos = list(
-        itertools.product(
-            arquivos_h,
-            arquivos_m,
-            arquivos_c
+        antigo.unlink(
+            missing_ok=True
         )
-    )
 
 
     st.success(
         f"🔥 Serão gerados "
-        f"{len(combos)} vídeo(s)."
+        f"{len(combinacoes)} vídeo(s)."
     )
 
 
@@ -1517,329 +1202,93 @@ if st.button(
         0
     )
 
-    status = st.empty()
+    gerados = []
+
+    erros = []
 
 
-    lista_hooks = [
-        linha.strip()
-        for linha in texto_manchete.splitlines()
-        if linha.strip()
-    ]
+    # ----------------------------------------
+    # PROCESSAR
+    # ----------------------------------------
 
-
-    for indice, combo in enumerate(
-        combos
+    for indice, combinacao in enumerate(
+        combinacoes,
+        start=1
     ):
 
-        nome_h, nome_m, nome_c = combo
-
-
-        status.info(
+        st.write(
             f"🎬 Processando vídeo "
-            f"{indice + 1}/{len(combos)}..."
+            f"{indice}/{len(combinacoes)}..."
         )
 
 
-        caminho_h = os.path.join(
-            PATH_GANCHOS,
-            nome_h
-        )
-
-        caminho_m = os.path.join(
-            PATH_CORPOS,
-            nome_m
-        )
-
-        caminho_c = os.path.join(
-            PATH_CTAS,
-            nome_c
+        nome_saida = (
+            f"{safe_name(nome_arquivos)}_"
+            f"{indice:03d}.mp4"
         )
 
 
-        temp_dir = os.path.join(
-            PROJ_PATH,
-            "temp"
-        )
-
-        os.makedirs(
-            temp_dir,
-            exist_ok=True
+        arquivo_saida = (
+            PATH_OUTPUT
+            / nome_saida
         )
 
 
-        h_tmp = os.path.join(
-            temp_dir,
-            f"h_{indice}.mp4"
-        )
+        try:
 
-        m_tmp = os.path.join(
-            temp_dir,
-            f"m_{indice}.mp4"
-        )
-
-        c_tmp = os.path.join(
-            temp_dir,
-            f"c_{indice}.mp4"
-        )
-
-
-        saida_base = os.path.join(
-            PATH_OUTPUT,
-            f"video_final_{indice + 1}.mp4"
-        )
-
-
-        # ----------------------------------------
-        # ESPELHAMENTO
-        # ----------------------------------------
-
-        esp_h = (
-            random.choice(
-                [True, False]
-            )
-            if espelhar
-            else False
-        )
-
-        esp_m = (
-            random.choice(
-                [True, False]
-            )
-            if espelhar
-            else False
-        )
-
-        esp_c = (
-            random.choice(
-                [True, False]
-            )
-            if espelhar
-            else False
-        )
-
-
-        # ----------------------------------------
-        # NORMALIZAR
-        # ----------------------------------------
-
-        ok, erro = normalizar_video(
-            caminho_h,
-            h_tmp,
-            esp_h
-        )
-
-        if not ok:
-
-            st.error(
-                f"Erro no Gancho:\n{erro}"
+            juntar_videos(
+                combinacao,
+                arquivo_saida
             )
 
-            continue
-
-
-        ok, erro = normalizar_video(
-            caminho_m,
-            m_tmp,
-            esp_m
-        )
-
-        if not ok:
-
-            st.error(
-                f"Erro no Corpo:\n{erro}"
+            gerados.append(
+                arquivo_saida
             )
 
-            continue
+        except Exception as erro:
 
-
-        ok, erro = normalizar_video(
-            caminho_c,
-            c_tmp,
-            esp_c
-        )
-
-        if not ok:
-
-            st.error(
-                f"Erro no CTA:\n{erro}"
-            )
-
-            continue
-
-
-        # ----------------------------------------
-        # CONCATENAR
-        # ----------------------------------------
-
-        ok, erro = concatenar_videos(
-            [
-                h_tmp,
-                m_tmp,
-                c_tmp
-            ],
-            saida_base
-        )
-
-
-        if not ok:
-
-            st.error(
-                f"❌ Erro ao juntar "
-                f"o vídeo {indice + 1}:"
-            )
-
-            st.code(
-                erro
-            )
-
-            continue
-
-
-        arquivo_atual = saida_base
-
-
-        # ----------------------------------------
-        # LEGENDAS
-        # ----------------------------------------
-
-        if legenda_ativa:
-
-            ass = os.path.join(
-                temp_dir,
-                f"legenda_{indice}.ass"
-            )
-
-            legenda_ok = gerar_legendas(
-                arquivo_atual,
-                ass
-            )
-
-            if legenda_ok:
-
-                saida_legenda = os.path.join(
-                    temp_dir,
-                    f"legenda_video_{indice}.mp4"
+            erros.append(
+                (
+                    nome_saida,
+                    str(erro)
                 )
-
-                ok, erro = aplicar_ass(
-                    arquivo_atual,
-                    ass,
-                    saida_legenda
-                )
-
-                if ok:
-
-                    shutil.move(
-                        saida_legenda,
-                        arquivo_atual
-                    )
-
-
-        # ----------------------------------------
-        # HOOK
-        # ----------------------------------------
-
-        if (
-            hook_ativo
-            and lista_hooks
-        ):
-
-            texto_hook = (
-                lista_hooks[
-                    indice
-                    % len(lista_hooks)
-                ]
             )
-
-            ass_hook = os.path.join(
-                temp_dir,
-                f"hook_{indice}.ass"
-            )
-
-            gerar_hook_ass(
-                texto_hook,
-                ass_hook
-            )
-
-            saida_hook = os.path.join(
-                temp_dir,
-                f"hook_video_{indice}.mp4"
-            )
-
-            ok, erro = aplicar_ass(
-                arquivo_atual,
-                ass_hook,
-                saida_hook
-            )
-
-            if ok:
-
-                shutil.move(
-                    saida_hook,
-                    arquivo_atual
-                )
-
-
-        # ----------------------------------------
-        # ANTI DUPLICIDADE
-        # ----------------------------------------
-
-        if anti_dup:
-
-            saida_variacao = os.path.join(
-                temp_dir,
-                f"variacao_{indice}.mp4"
-            )
-
-            ok, erro = aplicar_variacao_visual(
-                arquivo_atual,
-                saida_variacao
-            )
-
-            if ok:
-
-                shutil.move(
-                    saida_variacao,
-                    arquivo_atual
-                )
-
-
-        # ----------------------------------------
-        # LIMPEZA
-        # ----------------------------------------
-
-        for arquivo_temp in [
-            h_tmp,
-            m_tmp,
-            c_tmp
-        ]:
-
-            if os.path.exists(
-                arquivo_temp
-            ):
-
-                try:
-
-                    os.remove(
-                        arquivo_temp
-                    )
-
-                except Exception:
-                    pass
 
 
         progresso.progress(
-            (indice + 1)
-            / len(combos)
+            indice / len(combinacoes)
         )
 
 
-    status.success(
-        "🎉 Geração concluída!"
-    )
+    # ----------------------------------------
+    # RESULTADO
+    # ----------------------------------------
+
+    if gerados:
+
+        st.success(
+            f"🎉 {len(gerados)} vídeo(s) "
+            f"gerado(s) com sucesso!"
+        )
 
 
-    st.balloons()
+    if erros:
+
+        st.error(
+            f"❌ {len(erros)} vídeo(s) "
+            f"apresentaram erro."
+        )
+
+        for nome, erro in erros:
+
+            with st.expander(
+                f"Detalhes: {nome}"
+            ):
+
+                st.code(
+                    erro
+                )
+
 
     st.rerun()
 
@@ -1848,163 +1297,90 @@ if st.button(
 # GALERIA
 # ============================================================
 
-st.divider()
-
-st.subheader(
-    "4. Vídeos Prontos"
+videos_prontos = sorted(
+    PATH_OUTPUT.glob(
+        "*.mp4"
+    )
 )
 
 
-videos_gerados = sorted(
-    [
-        nome
-        for nome in os.listdir(
-            PATH_OUTPUT
-        )
-        if nome.lower().endswith(
-            ".mp4"
-        )
-    ]
-)
+if videos_prontos:
 
+    st.divider()
 
-if not videos_gerados:
-
-    st.info(
-        "ℹ️ Nenhum vídeo gerado ainda."
+    st.header(
+        "🎬 Galeria de Vídeos Prontos"
     )
 
-else:
-
-    st.success(
-        f"✅ {len(videos_gerados)} vídeo(s) disponíveis."
-    )
-
-
-    # ========================================
-    # ZIP
-    # ========================================
-
-    zip_path = os.path.join(
-        PATH_OUTPUT,
-        f"{projeto_atual}_videos.zip"
-    )
-
-
-    try:
-
-        with zipfile.ZipFile(
-            zip_path,
-            "w",
-            zipfile.ZIP_DEFLATED
-        ) as zipf:
-
-            for video in videos_gerados:
-
-                caminho = os.path.join(
-                    PATH_OUTPUT,
-                    video
-                )
-
-                zipf.write(
-                    caminho,
-                    arcname=video
-                )
-
-        with open(
-            zip_path,
-            "rb"
-        ) as arquivo_zip:
-
-            st.download_button(
-                "📦 BAIXAR TODOS OS VÍDEOS (.ZIP)",
-                data=arquivo_zip,
-                file_name=(
-                    f"{projeto_atual}_videos.zip"
-                ),
-                mime="application/zip",
-                type="primary",
-                use_container_width=True
-            )
-
-    except Exception as e:
-
-        st.warning(
-            f"Não foi possível criar o ZIP: {e}"
-        )
-
-
-    st.write("")
-
-
-    # ========================================
-    # GALERIA
-    # ========================================
 
     colunas = st.columns(3)
 
 
     for indice, video in enumerate(
-        videos_gerados
+        videos_prontos
     ):
-
-        caminho_video = os.path.join(
-            PATH_OUTPUT,
-            video
-        )
 
         with colunas[
             indice % 3
         ]:
 
             st.markdown(
-                f"### 🎬 Vídeo {indice + 1}"
-            )
-
-            st.caption(
-                video
+                f"**🎬 {video.name}**"
             )
 
             st.video(
-                caminho_video
+                str(video)
             )
 
-            try:
-
-                tamanho = os.path.getsize(
-                    caminho_video
-                )
-
-                tamanho_mb = round(
-                    tamanho / 1024 / 1024,
-                    2
-                )
-
-                st.caption(
-                    f"📦 {tamanho_mb} MB"
-                )
-
-            except Exception:
-                pass
-
-
             with open(
-                caminho_video,
+                video,
                 "rb"
-            ) as arquivo_video:
+            ) as arquivo:
 
-                st.download_button(
-                    "⬇️ Baixar Este Vídeo",
-                    data=arquivo_video,
-                    file_name=video,
-                    mime="video/mp4",
-                    use_container_width=True,
-                    key=(
-                        f"download_"
-                        f"{projeto_atual}_"
-                        f"{indice}"
-                    )
-                )
+                dados = arquivo.read()
+
+
+            st.download_button(
+                "⬇️ Baixar Este Vídeo",
+                data=dados,
+                file_name=video.name,
+                mime="video/mp4",
+                use_container_width=True,
+                key=f"download_{indice}"
+            )
+
+
+    # ========================================================
+    # ZIP
+    # ========================================================
+
+    arquivo_zip = (
+        PATH_OUTPUT
+        / f"{safe_name(projeto_ativo)}_videos.zip"
+    )
+
+
+    criar_zip(
+        PATH_OUTPUT,
+        arquivo_zip
+    )
+
+
+    with open(
+        arquivo_zip,
+        "rb"
+    ) as arquivo:
+
+        dados_zip = arquivo.read()
+
+
+    st.download_button(
+        "📦 BAIXAR TODOS OS VÍDEOS",
+        data=dados_zip,
+        file_name=arquivo_zip.name,
+        mime="application/zip",
+        use_container_width=True
+    )
 
 
 # ============================================================
