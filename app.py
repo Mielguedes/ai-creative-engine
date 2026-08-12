@@ -41,7 +41,31 @@ if not projetos_disponiveis:
     st.warning("⚠️ Nenhum projeto encontrado. Crie um projeto no menu lateral para começar!")
     st.stop()
 
-projeto_atual = st.sidebar.selectbox("Selecione o Projeto Ativo:", projetos_disponiveis)
+# Navegação entre a lista de projetos e o projeto aberto.
+if "mostrar_projeto" not in st.session_state:
+    st.session_state.mostrar_projeto = True
+
+if not st.session_state.mostrar_projeto:
+    st.sidebar.info("📁 Selecione um projeto para abrir.")
+    projeto_selecionado = st.sidebar.selectbox(
+        "Projetos disponíveis:",
+        projetos_disponiveis,
+        key="projeto_selecao_lista"
+    )
+    if st.sidebar.button("▶️ Abrir Projeto", use_container_width=True):
+        st.session_state.mostrar_projeto = True
+        st.rerun()
+    st.stop()
+
+projeto_atual = st.sidebar.selectbox(
+    "Selecione o Projeto Ativo:",
+    projetos_disponiveis,
+    key="projeto_ativo"
+)
+
+if st.sidebar.button("← Voltar aos Projetos", use_container_width=True):
+    st.session_state.mostrar_projeto = False
+    st.rerun()
 PROJ_PATH = os.path.join(BASE_DIR, projeto_atual)
 
 # Garante as pastas mesmo se o projeto tiver sido criado antes desta versão.
