@@ -44,10 +44,16 @@ if not projetos_disponiveis:
 projeto_atual = st.sidebar.selectbox("Selecione o Projeto Ativo:", projetos_disponiveis)
 PROJ_PATH = os.path.join(BASE_DIR, projeto_atual)
 
+# Garante as pastas mesmo se o projeto tiver sido criado antes desta versão.
 PATH_GANCHOS = os.path.join(PROJ_PATH, "ganchos")
 PATH_CORPOS = os.path.join(PROJ_PATH, "corpos")
 PATH_CTAS = os.path.join(PROJ_PATH, "ctas")
 PATH_OUTPUT = os.path.join(PROJ_PATH, "output")
+
+os.makedirs(PATH_GANCHOS, exist_ok=True)
+os.makedirs(PATH_CORPOS, exist_ok=True)
+os.makedirs(PATH_CTAS, exist_ok=True)
+os.makedirs(PATH_OUTPUT, exist_ok=True)
 
 st.sidebar.divider()
 
