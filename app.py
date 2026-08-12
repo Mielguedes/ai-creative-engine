@@ -10,7 +10,43 @@ import random
 from faster_whisper import WhisperModel
 
 # --- CONFIGURAÇÃO DA PÁGINA STREAMLIT ---
+
 st.set_page_config(page_title="AI Creative Engine Local", layout="wide")
+
+# --- CABEÇALHO SUPERIOR / USUÁRIO / SAIR ---
+st.markdown("""
+<style>
+.topbar {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 10px;
+    padding: 4px 0 14px 0;
+}
+.user-pill {
+    padding: 8px 14px;
+    border: 1px solid rgba(120,120,120,.25);
+    border-radius: 10px;
+    background: rgba(120,120,120,.08);
+    font-size: 14px;
+    font-weight: 600;
+}
+.logout-note {
+    color: #777;
+    font-size: 12px;
+}
+</style>
+""", unsafe_allow_html=True)
+
+top_user_col1, top_user_col2, top_user_col3 = st.columns([8, 1.5, 1.2])
+
+with top_user_col2:
+    st.markdown('<div class="user-pill">👤 Usuário</div>', unsafe_allow_html=True)
+
+with top_user_col3:
+    if st.button("🚪 Sair", use_container_width=True, key="top_logout"):
+        st.session_state.mostrar_projeto = False
+        st.rerun()
 
 # --- ESTRUTURA DE PASTAS E PROJETOS ---
 BASE_DIR = os.path.abspath("projetos")
@@ -63,9 +99,6 @@ projeto_atual = st.sidebar.selectbox(
     key="projeto_ativo"
 )
 
-if st.sidebar.button("← Voltar aos Projetos", use_container_width=True):
-    st.session_state.mostrar_projeto = False
-    st.rerun()
 PROJ_PATH = os.path.join(BASE_DIR, projeto_atual)
 
 # Garante as pastas mesmo se o projeto tiver sido criado antes desta versão.
