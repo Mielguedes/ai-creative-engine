@@ -10,43 +10,7 @@ import random
 from faster_whisper import WhisperModel
 
 # --- CONFIGURAÇÃO DA PÁGINA STREAMLIT ---
-
 st.set_page_config(page_title="AI Creative Engine Local", layout="wide")
-
-# --- CABEÇALHO SUPERIOR / USUÁRIO / SAIR ---
-st.markdown("""
-<style>
-.topbar {
-    display: flex;
-    justify-content: flex-end;
-    align-items: center;
-    gap: 10px;
-    padding: 4px 0 14px 0;
-}
-.user-pill {
-    padding: 8px 14px;
-    border: 1px solid rgba(120,120,120,.25);
-    border-radius: 10px;
-    background: rgba(120,120,120,.08);
-    font-size: 14px;
-    font-weight: 600;
-}
-.logout-note {
-    color: #777;
-    font-size: 12px;
-}
-</style>
-""", unsafe_allow_html=True)
-
-top_user_col1, top_user_col2, top_user_col3 = st.columns([8, 1.5, 1.2])
-
-with top_user_col2:
-    st.markdown('<div class="user-pill">👤 Usuário</div>', unsafe_allow_html=True)
-
-with top_user_col3:
-    if st.button("🚪 Sair", use_container_width=True, key="top_logout"):
-        st.session_state.mostrar_projeto = False
-        st.rerun()
 
 # --- ESTRUTURA DE PASTAS E PROJETOS ---
 BASE_DIR = os.path.abspath("projetos")
@@ -77,40 +41,13 @@ if not projetos_disponiveis:
     st.warning("⚠️ Nenhum projeto encontrado. Crie um projeto no menu lateral para começar!")
     st.stop()
 
-# Navegação entre a lista de projetos e o projeto aberto.
-if "mostrar_projeto" not in st.session_state:
-    st.session_state.mostrar_projeto = True
-
-if not st.session_state.mostrar_projeto:
-    st.sidebar.info("📁 Selecione um projeto para abrir.")
-    projeto_selecionado = st.sidebar.selectbox(
-        "Projetos disponíveis:",
-        projetos_disponiveis,
-        key="projeto_selecao_lista"
-    )
-    if st.sidebar.button("▶️ Abrir Projeto", use_container_width=True):
-        st.session_state.mostrar_projeto = True
-        st.rerun()
-    st.stop()
-
-projeto_atual = st.sidebar.selectbox(
-    "Selecione o Projeto Ativo:",
-    projetos_disponiveis,
-    key="projeto_ativo"
-)
-
+projeto_atual = st.sidebar.selectbox("Selecione o Projeto Ativo:", projetos_disponiveis)
 PROJ_PATH = os.path.join(BASE_DIR, projeto_atual)
 
-# Garante as pastas mesmo se o projeto tiver sido criado antes desta versão.
 PATH_GANCHOS = os.path.join(PROJ_PATH, "ganchos")
 PATH_CORPOS = os.path.join(PROJ_PATH, "corpos")
 PATH_CTAS = os.path.join(PROJ_PATH, "ctas")
 PATH_OUTPUT = os.path.join(PROJ_PATH, "output")
-
-os.makedirs(PATH_GANCHOS, exist_ok=True)
-os.makedirs(PATH_CORPOS, exist_ok=True)
-os.makedirs(PATH_CTAS, exist_ok=True)
-os.makedirs(PATH_OUTPUT, exist_ok=True)
 
 st.sidebar.divider()
 
@@ -225,82 +162,16 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         return False
 
 # --- FUNÇÃO: PREPARAR/TRATAR VÍDEO INDIVIDUAL DE BLOCO ---
-def executar_ffmpeg(cmd):
-    """Executa FFmpeg e devolve sucesso + mensagem de erro."""
-    try:
-        resultado = subprocess.run(
-            cmd,
-            shell=True,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace"
-        )
-        if resultado.returncode != 0:
-            erro = (resultado.stderr or resultado.stdout or "Erro desconhecido").strip()
-            return False, erro[-6000:]
-        return True, ""
-    except Exception as e:
-        return False, str(e)
-
-
-def video_tem_audio(caminho):
-    """Verifica se o arquivo possui pelo menos uma faixa de áudio."""
-    cmd = (
-        f'ffprobe -v error -select_streams a:0 '
-        f'-show_entries stream=index -of csv=p=0 "{caminho}"'
-    )
-    try:
-        r = subprocess.run(
-            cmd, shell=True, capture_output=True, text=True,
-            encoding="utf-8", errors="replace"
-        )
-        return r.returncode == 0 and bool(r.stdout.strip())
-    except Exception:
-        return False
-
-
-def processar_bloco_individual(
-    caminho_entrada,
-    caminho_saida,
-    encoder_video="libx264",
-    deve_espelhar=False
-):
-    """Normaliza cada bloco para 1080x1920, H.264 + AAC, pronto para concatenação."""
-
-    filtros = [
-        "scale=1080:1920:force_original_aspect_ratio=increase",
-        "crop=1080:1920",
-        "setsar=1"
-    ]
-
+def processar_bloco_individual(caminho_entrada, caminho_saida, encoder_video="libx264", deve_espelhar=False):
+    filtros = []
     if deve_espelhar:
-        filtros.insert(0, "hflip")
-
-    vf = ",".join(filtros)
-
-    # Se o bloco não tiver áudio, cria áudio silencioso com a mesma duração.
-    if video_tem_audio(caminho_entrada):
-        cmd = (
-            f'ffmpeg -y -i "{caminho_entrada}" '
-            f'-vf "{vf}" '
-            f'-c:v {encoder_video} -preset fast -pix_fmt yuv420p '
-            f'-c:a aac -ar 44100 -ac 2 '
-            f'-movflags +faststart "{caminho_saida}"'
-        )
+        filtros.append("hflip")
+    
+    if filtros:
+        cmd = f'ffmpeg -y -i "{caminho_entrada}" -vf "{",".join(filtros)}" -c:v {encoder_video} -pix_fmt yuv420p -c:a copy "{caminho_saida}"'
+        subprocess.run(cmd, shell=True)
     else:
-        cmd = (
-            f'ffmpeg -y -i "{caminho_entrada}" '
-            f'-f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 '
-            f'-map 0:v:0 -map 1:a:0 '
-            f'-vf "{vf}" '
-            f'-c:v {encoder_video} -preset fast -pix_fmt yuv420p '
-            f'-c:a aac -ar 44100 -ac 2 -shortest '
-            f'-movflags +faststart "{caminho_saida}"'
-        )
-
-    return executar_ffmpeg(cmd)
-
+        shutil.copyfile(caminho_entrada, caminho_saida)
 
 def criar_zip_projeto(pasta_output, caminho_zip):
     with zipfile.ZipFile(caminho_zip, 'w', zipfile.ZIP_DEFLATED) as zipf:
@@ -444,254 +315,124 @@ st.divider()
 
 # --- BOTÃO DE PROCESSAMENTO ---
 if st.button("🚀 Multiplicar e Gerar Todos os Vídeos", type="primary", use_container_width=True):
-    list_h = sorted([
-        os.path.join(PATH_GANCHOS, f)
-        for f in os.listdir(PATH_GANCHOS)
-        if f.lower().endswith((".mp4", ".mov"))
-    ])
-    list_m = sorted([
-        os.path.join(PATH_CORPOS, f)
-        for f in os.listdir(PATH_CORPOS)
-        if f.lower().endswith((".mp4", ".mov"))
-    ])
-    list_c = sorted([
-        os.path.join(PATH_CTAS, f)
-        for f in os.listdir(PATH_CTAS)
-        if f.lower().endswith((".mp4", ".mov"))
-    ])
+    list_h = [os.path.join(PATH_GANCHOS, f) for f in os.listdir(PATH_GANCHOS) if f.endswith(('mp4', 'mov'))]
+    list_m = [os.path.join(PATH_CORPOS, f) for f in os.listdir(PATH_CORPOS) if f.endswith(('mp4', 'mov'))]
+    list_c = [os.path.join(PATH_CTAS, f) for f in os.listdir(PATH_CTAS) if f.endswith(('mp4', 'mov'))]
 
-    if not list_h or not list_m or not list_c:
-        st.error("❌ Adicione pelo menos 1 vídeo em cada coluna: Gancho, Corpo e CTA.")
+    if len(list_h) < 1 or len(list_m) < 1 or len(list_c) < 1:
+        st.error("Adicione pelo menos 1 vídeo em cada uma das 3 colunas para gerar!")
     else:
-        lista_hooks = [
-            linha.strip().upper()
-            for linha in texto_manchete.split("\n")
-            if linha.strip()
-        ]
+        lista_hooks = [linha.strip().upper() for linha in texto_manchete.split('\n') if linha.strip()]
 
         combos = list(itertools.product(list_h, list_m, list_c))
-        total = len(combos)
-
-        st.info(
-            f"🎬 **{len(list_h)} Hook(s) × {len(list_m)} Corpo(s) × "
-            f"{len(list_c)} CTA(s) = {total} vídeo(s)**"
-        )
-
+        st.success(f"🔥 Gerando {len(combos)} vídeo(s) com Encoder [{encoder_escolhido}]...")
         prog = st.progress(0)
-        status = st.empty()
-        erros = []
-        gerados = 0
-
-        # Remove MP4 antigos para a galeria representar somente esta geração.
-        for antigo in os.listdir(PATH_OUTPUT):
-            if antigo.lower().endswith(".mp4"):
-                try:
-                    os.remove(os.path.join(PATH_OUTPUT, antigo))
-                except Exception:
-                    pass
 
         for idx, (h, m, c) in enumerate(combos):
-            numero = idx + 1
-            status.write(f"⏳ Gerando **{numero}/{total}**...")
-
-            out_final = os.path.abspath(
-                os.path.join(PATH_OUTPUT, f"video_final_{numero:03d}.mp4")
-            )
-
+            print(f"\n=================== PROCESSANDO VARIAÇÃO {idx+1}/{len(combos)} ===================")
+            out_final = os.path.abspath(os.path.join(PATH_OUTPUT, f"video_final_{idx+1}.mp4"))
+            
+            # Arquivos temporários dos blocos com espelhamento aleatório
             h_tmp = os.path.abspath(os.path.join(PROJ_PATH, f"tmp_h_{idx}.mp4"))
             m_tmp = os.path.abspath(os.path.join(PROJ_PATH, f"tmp_m_{idx}.mp4"))
             c_tmp = os.path.abspath(os.path.join(PROJ_PATH, f"tmp_c_{idx}.mp4"))
+
+            # Sorteio de espelhamento por bloco
+            esp_h = random.choice([True, False]) if espelhar_blocos_rand else False
+            esp_m = random.choice([True, False]) if espelhar_blocos_rand else False
+            esp_c = random.choice([True, False]) if espelhar_blocos_rand else False
+
+            processar_bloco_individual(h, h_tmp, encoder_escolhido, esp_h)
+            processar_bloco_individual(m, m_tmp, encoder_escolhido, esp_m)
+            processar_bloco_individual(c, c_tmp, encoder_escolhido, esp_c)
+
             concat_list = os.path.abspath(os.path.join(PROJ_PATH, f"list_{idx}.txt"))
+            with open(concat_list, "w", encoding="utf-8") as f:
+                f.write(f"file '{h_tmp}'\nfile '{m_tmp}'\nfile '{c_tmp}'\n")
 
-            try:
-                esp_h = random.choice([True, False]) if espelhar_blocos_rand else False
-                esp_m = random.choice([True, False]) if espelhar_blocos_rand else False
-                esp_c = random.choice([True, False]) if espelhar_blocos_rand else False
+            # 1. PASSO 1: Concatenação segura com re-encodamento
+            cmd_concat = f'ffmpeg -y -f concat -safe 0 -i "{concat_list}" -c:v {encoder_escolhido} -pix_fmt yuv420p -c:a aac "{out_final}"'
+            subprocess.run(cmd_concat, shell=True)
 
-                ok, erro = processar_bloco_individual(h, h_tmp, encoder_escolhido, esp_h)
-                if not ok:
-                    raise RuntimeError(f"HOOK: {erro}")
+            # Remover blocos temporários
+            for t_b in [h_tmp, m_tmp, c_tmp]:
+                if os.path.exists(t_b): os.remove(t_b)
 
-                ok, erro = processar_bloco_individual(m, m_tmp, encoder_escolhido, esp_m)
-                if not ok:
-                    raise RuntimeError(f"CORPO: {erro}")
+            if not os.path.exists(out_final):
+                st.error(f"Erro ao concatenar variação {idx+1}. Mude para 'CPU Padrão' nas opções!")
+                continue
 
-                ok, erro = processar_bloco_individual(c, c_tmp, encoder_escolhido, esp_c)
-                if not ok:
-                    raise RuntimeError(f"CTA: {erro}")
+            # 2. PASSO 2: Legendas Word Pop ASS
+            ass_file = os.path.abspath(os.path.join(PROJ_PATH, f"temp_{idx}.ass"))
+            if legenda_ativa:
+                has_leg = gerar_legenda_ass(out_final, ass_file, posicao_v=posicao_legenda_v, tamanho_fonte=tamanho_legenda)
+                if has_leg and os.path.exists(ass_file):
+                    temp_leg = os.path.abspath(os.path.join(PROJ_PATH, f"temp_leg_{idx}.mp4"))
+                    ass_path_clean = ass_file.replace("\\", "/").replace(":", "\\:")
+                    cmd_leg = f'ffmpeg -y -i "{out_final}" -vf "subtitles=\'{ass_path_clean}\'" -c:v {encoder_escolhido} -pix_fmt yuv420p -c:a copy "{temp_leg}"'
+                    subprocess.run(cmd_leg, shell=True)
+                    if os.path.exists(temp_leg):
+                        shutil.move(temp_leg, out_final)
 
-                # Os três arquivos já estão normalizados para o mesmo padrão.
-                with open(concat_list, "w", encoding="utf-8") as f:
-                    for caminho in (h_tmp, m_tmp, c_tmp):
-                        f.write(f"file '{caminho.replace(chr(92), '/')}'\n")
+            # 3. PASSO 3: Hook Inclinado no Topo
+            if hook_ativo and lista_hooks:
+                hook_selecionado = lista_hooks[idx % len(lista_hooks)]
+                hook_ass_file = os.path.abspath(os.path.join(PROJ_PATH, f"temp_hook_{idx}.ass"))
+                gerar_hook_ass(hook_selecionado, hook_ass_file, posicao_y=posicao_hook_y, tamanho_fonte=tamanho_hook)
+                
+                if os.path.exists(hook_ass_file):
+                    temp_hk = os.path.abspath(os.path.join(PROJ_PATH, f"temp_hk_{idx}.mp4"))
+                    hook_path_clean = hook_ass_file.replace("\\", "/").replace(":", "\\:")
+                    cmd_hk = f'ffmpeg -y -i "{out_final}" -vf "subtitles=\'{hook_path_clean}\'" -c:v {encoder_escolhido} -pix_fmt yuv420p -c:a copy "{temp_hk}"'
+                    subprocess.run(cmd_hk, shell=True)
+                    if os.path.exists(temp_hk):
+                        shutil.move(temp_hk, out_final)
+                    if os.path.exists(hook_ass_file): os.remove(hook_ass_file)
 
-                cmd_concat = (
-                    f'ffmpeg -y -f concat -safe 0 -i "{concat_list}" '
-                    f'-c:v {encoder_escolhido} -preset fast -pix_fmt yuv420p '
-                    f'-c:a aac -ar 44100 -ac 2 -movflags +faststart '
-                    f'"{out_final}"'
+            # 4. PASSO 4: MODIFICADORES VISUAIS ESTÁVEIS
+            if auto_ultra_anti_dup:
+                filtros_v = []
+
+                # Pan & Scan seguro (Redimensiona sempre para 1080x1920 no final)
+                factor = round(random.uniform(0.85, 0.95), 2)
+                filtros_v.append(f"crop=iw*{factor}:ih*{factor}")
+                filtros_v.append("scale=1080:1920")
+
+                # GRADAÇÃO DINÂMICA DE COR ESTÁVEL
+                color_preset = random.choice([
+                    "eq=brightness=0.02:contrast=1.05:saturation=1.04",
+                    "eq=brightness=-0.015:contrast=1.07:saturation=0.96",
+                    "eq=brightness=0.01:contrast=1.03:saturation=1.08",
+                    "eq=brightness=-0.005:contrast=1.06:saturation=1.00",
+                    "eq=brightness=0.025:contrast=1.02:saturation=0.95",
+                    "eq=brightness=-0.02:contrast=1.04:saturation=1.05",
+                ])
+                filtros_v.append(color_preset)
+
+                temp_filt = os.path.abspath(os.path.join(PROJ_PATH, f"temp_filt_{idx}.mp4"))
+                
+                cmd_v_str = f'-vf "{",".join(filtros_v)}"'
+
+                cmd_filt = (
+                    f'ffmpeg -y -i "{out_final}" {cmd_v_str} -c:v {encoder_escolhido} -pix_fmt yuv420p -c:a copy '
+                    f'-metadata title="" -metadata comment="" -metadata encoder="Apple iOS Camera 17.4.1" '
+                    f'"{temp_filt}"'
                 )
+                print(f"Aplicando Modulação Visual Anti-Duplicidade: {cmd_filt}")
+                subprocess.run(cmd_filt, shell=True)
 
-                ok, erro = executar_ffmpeg(cmd_concat)
-                if not ok or not os.path.exists(out_final):
-                    raise RuntimeError(f"CONCATENAÇÃO: {erro}")
+                if os.path.exists(temp_filt):
+                    shutil.move(temp_filt, out_final)
 
-                # Legendas automáticas
-                ass_file = os.path.abspath(os.path.join(PROJ_PATH, f"temp_{idx}.ass"))
+            # Limpeza de temporários
+            for t_file in [concat_list, ass_file]:
+                if os.path.exists(t_file): os.remove(t_file)
 
-                if legenda_ativa:
-                    has_leg = gerar_legenda_ass(
-                        out_final,
-                        ass_file,
-                        posicao_v=posicao_legenda_v,
-                        tamanho_fonte=tamanho_legenda
-                    )
+            prog.progress((idx + 1) / len(combos))
 
-                    if has_leg and os.path.exists(ass_file):
-                        temp_leg = os.path.abspath(
-                            os.path.join(PROJ_PATH, f"temp_leg_{idx}.mp4")
-                        )
-                        ass_path_clean = ass_file.replace("\\", "/").replace(":", "\\:")
-
-                        cmd_leg = (
-                            f'ffmpeg -y -i "{out_final}" '
-                            f'-vf "subtitles=\'{ass_path_clean}\'" '
-                            f'-c:v {encoder_escolhido} -preset fast '
-                            f'-pix_fmt yuv420p -c:a aac -ar 44100 -ac 2 '
-                            f'-movflags +faststart "{temp_leg}"'
-                        )
-
-                        ok_leg, erro_leg = executar_ffmpeg(cmd_leg)
-
-                        if ok_leg and os.path.exists(temp_leg):
-                            os.replace(temp_leg, out_final)
-                        elif not ok_leg:
-                            st.warning(
-                                f"⚠️ Legenda não aplicada no vídeo {numero}: {erro_leg}"
-                            )
-
-                # Hook escrito no topo
-                if hook_ativo and lista_hooks:
-                    hook_selecionado = lista_hooks[idx % len(lista_hooks)]
-                    hook_ass_file = os.path.abspath(
-                        os.path.join(PROJ_PATH, f"temp_hook_{idx}.ass")
-                    )
-
-                    gerar_hook_ass(
-                        hook_selecionado,
-                        hook_ass_file,
-                        posicao_y=posicao_hook_y,
-                        tamanho_fonte=tamanho_hook
-                    )
-
-                    if os.path.exists(hook_ass_file):
-                        temp_hk = os.path.abspath(
-                            os.path.join(PROJ_PATH, f"temp_hk_{idx}.mp4")
-                        )
-                        hook_path_clean = hook_ass_file.replace("\\", "/").replace(":", "\\:")
-
-                        cmd_hk = (
-                            f'ffmpeg -y -i "{out_final}" '
-                            f'-vf "subtitles=\'{hook_path_clean}\'" '
-                            f'-c:v {encoder_escolhido} -preset fast '
-                            f'-pix_fmt yuv420p -c:a aac -ar 44100 -ac 2 '
-                            f'-movflags +faststart "{temp_hk}"'
-                        )
-
-                        ok_hk, erro_hk = executar_ffmpeg(cmd_hk)
-
-                        if ok_hk and os.path.exists(temp_hk):
-                            os.replace(temp_hk, out_final)
-                        elif not ok_hk:
-                            st.warning(
-                                f"⚠️ Hook não aplicado no vídeo {numero}: {erro_hk}"
-                            )
-
-                # Anti-duplicidade
-                if auto_ultra_anti_dup and os.path.exists(out_final):
-                    factor = round(random.uniform(0.85, 0.95), 2)
-
-                    filtros_v = [
-                        f"crop=iw*{factor}:ih*{factor}",
-                        "scale=1080:1920",
-                        random.choice([
-                            "eq=brightness=0.02:contrast=1.05:saturation=1.04",
-                            "eq=brightness=-0.015:contrast=1.07:saturation=0.96",
-                            "eq=brightness=0.01:contrast=1.03:saturation=1.08",
-                            "eq=brightness=-0.005:contrast=1.06:saturation=1.00",
-                            "eq=brightness=0.025:contrast=1.02:saturation=0.95",
-                            "eq=brightness=-0.02:contrast=1.04:saturation=1.05"
-                        ])
-                    ]
-
-                    temp_filt = os.path.abspath(
-                        os.path.join(PROJ_PATH, f"temp_filt_{idx}.mp4")
-                    )
-
-                    cmd_filt = (
-                        f'ffmpeg -y -i "{out_final}" '
-                        f'-vf "{",".join(filtros_v)}" '
-                        f'-c:v {encoder_escolhido} -preset fast '
-                        f'-pix_fmt yuv420p -c:a aac -ar 44100 -ac 2 '
-                        f'-movflags +faststart "{temp_filt}"'
-                    )
-
-                    ok_filt, erro_filt = executar_ffmpeg(cmd_filt)
-
-                    if ok_filt and os.path.exists(temp_filt):
-                        os.replace(temp_filt, out_final)
-                    elif not ok_filt:
-                        st.warning(
-                            f"⚠️ Anti-duplicidade não aplicado no vídeo {numero}: "
-                            f"{erro_filt}"
-                        )
-
-                if not os.path.exists(out_final) or os.path.getsize(out_final) < 1000:
-                    raise RuntimeError("FFmpeg terminou sem criar um MP4 válido.")
-
-                gerados += 1
-                status.write(f"✅ **{numero}/{total}** concluído.")
-
-            except Exception as e:
-                erros.append(f"Vídeo {numero}: {e}")
-                st.error(f"❌ Vídeo {numero} falhou.")
-                with st.expander(f"🔎 Ver erro do vídeo {numero}"):
-                    st.code(str(e))
-
-            finally:
-                temporarios = [
-                    h_tmp, m_tmp, c_tmp, concat_list,
-                    os.path.join(PROJ_PATH, f"temp_{idx}.ass"),
-                    os.path.join(PROJ_PATH, f"temp_hook_{idx}.ass"),
-                    os.path.join(PROJ_PATH, f"temp_leg_{idx}.mp4"),
-                    os.path.join(PROJ_PATH, f"temp_hk_{idx}.mp4"),
-                    os.path.join(PROJ_PATH, f"temp_filt_{idx}.mp4")
-                ]
-
-                for t_file in temporarios:
-                    if os.path.exists(t_file):
-                        try:
-                            os.remove(t_file)
-                        except Exception:
-                            pass
-
-            prog.progress(numero / total)
-
-        status.empty()
-
-        if gerados == total:
-            st.balloons()
-            st.success(f"🎉 **{gerados}/{total} vídeos gerados com sucesso!**")
-        elif gerados > 0:
-            st.warning(f"⚠️ **{gerados}/{total} vídeos foram gerados.**")
-            with st.expander("🔎 Ver todos os erros"):
-                for erro in erros:
-                    st.code(erro)
-        else:
-            st.error("❌ **Nenhum vídeo foi gerado.**")
-            st.write("Veja o erro exibido em cada vídeo acima para identificar exatamente o problema.")
-
-        # Não força rerun aqui: assim os erros ficam visíveis na tela.
+        st.balloons()
+        st.success(f"🎉 {len(combos)} vídeo(s) gerados com sucesso!")
+        st.rerun()
 
 st.divider()
 
