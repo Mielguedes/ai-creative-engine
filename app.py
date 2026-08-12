@@ -7,455 +7,54 @@ import shutil
 import zipfile
 import re
 import random
-import requests
 from faster_whisper import WhisperModel
 
-# ============================================================
-# CONFIGURAÇÃO DA PÁGINA
-# ============================================================
-st.set_page_config(
-    page_title="AI Creative Engine Local",
-    layout="wide"
-)
+# --- CONFIGURAÇÃO DA PÁGINA STREAMLIT ---
+st.set_page_config(page_title="AI Creative Engine Local", layout="wide")
 
-# ============================================================
-# SUPABASE / LOGIN
-# ============================================================
-def normalizar_supabase_url(url):
-    url = (url or "").strip().rstrip("/")
-    if url.endswith("/rest/v1"):
-        url = url[:-7]
-    return url.rstrip("/")
-
-try:
-    SUPABASE_URL = normalizar_supabase_url(st.secrets["SUPABASE_URL"])
-    SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
-except Exception:
-    st.error("❌ Configure SUPABASE_URL e SUPABASE_KEY em Settings → Secrets.")
-    st.stop()
-
-def supabase_auth(email, senha):
-    url = f"{SUPABASE_URL}/auth/v1/token?grant_type=password"
-    headers = {
-        "apikey": SUPABASE_KEY,
-        "Content-Type": "application/json",
-    }
-    resposta = requests.post(
-        url,
-        headers=headers,
-        json={"email": email.strip(), "password": senha},
-        timeout=20,
-    )
-    try:
-        dados = resposta.json()
-    except Exception:
-        dados = {}
-
-    if resposta.status_code != 200:
-        mensagem = dados.get("error_description") or dados.get("msg") or "E-mail ou senha incorretos."
-        return None, mensagem
-
-    return dados, None
-
-def buscar_perfil(access_token, email):
-    url = f"{SUPABASE_URL}/rest/v1/profiles"
-    headers = {
-        "apikey": SUPABASE_KEY,
-        "Authorization": f"Bearer {access_token}",
-    }
-    params = {
-        "select": "id,email,nome,ativo,plano",
-        "email": f"eq.{email}",
-        "limit": "1",
-    }
-    resposta = requests.get(
-        url,
-        headers=headers,
-        params=params,
-        timeout=20,
-    )
-
-    if resposta.status_code != 200:
-        return None, resposta.text
-
-    registros = resposta.json()
-    if not registros:
-        return None, "Perfil não encontrado na tabela profiles."
-
-    return registros[0], None
-
-def fazer_logout():
-    for chave in [
-        "auth_ok",
-        "access_token",
-        "refresh_token",
-        "user_id",
-        "user_email",
-        "user_name",
-        "user_plano",
-        "user_ativo",
-    ]:
-        st.session_state.pop(chave, None)
-    st.rerun()
-
-def tela_login():
-    st.markdown(
-        """
-        <style>
-        .login-title {
-            font-size: 42px;
-            font-weight: 800;
-            color: #183153;
-            margin-bottom: 4px;
-        }
-        .login-subtitle {
-            color: #7b8190;
-            font-size: 15px;
-            margin-bottom: 24px;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    st.markdown(
-        '<div class="login-title">🔐 AI Creative Engine</div>',
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        '<div class="login-subtitle">Entre para acessar o gerador de vídeos.</div>',
-        unsafe_allow_html=True,
-    )
-
-    email = st.text_input("📧 E-mail", key="login_email")
-    senha = st.text_input("🔑 Senha", type="password", key="login_password")
-
-    if st.button(
-        "🚀 ENTRAR",
-        type="primary",
-        use_container_width=True,
-        key="btn_login",
-    ):
-        if not email.strip() or not senha:
-            st.error("❌ Informe e-mail e senha.")
-            return
-
-        with st.spinner("Entrando..."):
-            dados, erro = supabase_auth(email, senha)
-
-        if erro:
-            st.error(f"❌ {erro}")
-            return
-
-        access_token = dados.get("access_token")
-        refresh_token = dados.get("refresh_token")
-        user = dados.get("user") or {}
-        user_id = user.get("id")
-
-        if not access_token or not user_id:
-            st.error("❌ O Supabase não retornou os dados de autenticação.")
-            return
-
-        perfil, erro_perfil = buscar_perfil(access_token, email.strip())
-
-        if erro_perfil:
-            st.error(f"❌ Não foi possível carregar seu perfil: {erro_perfil}")
-            return
-
-        if not bool(perfil.get("ativo", True)):
-            st.error("🔒 Este usuário está desativado.")
-            return
-
-        st.session_state["auth_ok"] = True
-        st.session_state["access_token"] = access_token
-        st.session_state["refresh_token"] = refresh_token
-        st.session_state["user_id"] = user_id
-        st.session_state["user_email"] = email.strip()
-        st.session_state["user_name"] = perfil.get("nome") or email.strip()
-        st.session_state["user_plano"] = (perfil.get("plano") or "user").lower()
-        st.session_state["user_ativo"] = bool(perfil.get("ativo", True))
-
-        st.rerun()
-
-if not st.session_state.get("auth_ok", False):
-    tela_login()
-    st.stop()
-
-# ============================================================
-# DADOS DO USUÁRIO LOGADO
-# ============================================================
-USER_ID = st.session_state["user_id"]
-USER_EMAIL = st.session_state["user_email"]
-USER_NAME = st.session_state.get("user_name") or USER_EMAIL
-USER_PLANO = st.session_state.get("user_plano", "user").lower()
-IS_ADMIN = USER_PLANO == "admin"
-
-# ============================================================
-# ESTRUTURA DE PASTAS E PROJETOS
-# Cada usuário possui sua própria pasta pelo UID do Supabase.
-# ============================================================
-BASE_DIR = os.path.abspath(
-    os.path.join("projetos", USER_ID)
-)
+# --- ESTRUTURA DE PASTAS E PROJETOS ---
+BASE_DIR = os.path.abspath("projetos")
 os.makedirs(BASE_DIR, exist_ok=True)
 
 def listar_projetos():
-    return sorted(
-        [
-            d
-            for d in os.listdir(BASE_DIR)
-            if os.path.isdir(os.path.join(BASE_DIR, d))
-        ]
-    )
+    return [d for d in os.listdir(BASE_DIR) if os.path.isdir(os.path.join(BASE_DIR, d))]
 
-# ============================================================
-# PAINEL ADMINISTRATIVO
-# ============================================================
-def buscar_todos_perfis_admin():
-    if not IS_ADMIN:
-        return None, "Acesso restrito ao administrador."
-
-    url = f"{SUPABASE_URL}/rest/v1/profiles"
-    headers = {
-        "apikey": SUPABASE_KEY,
-        "Authorization": f"Bearer {st.session_state['access_token']}",
-    }
-    params = {
-        "select": "id,email,nome,ativo,plano,created_at",
-        "order": "created_at.desc",
-    }
-
-    resposta = requests.get(
-        url,
-        headers=headers,
-        params=params,
-        timeout=20,
-    )
-
-    if resposta.status_code != 200:
-        return None, resposta.text
-
-    return resposta.json(), None
-
-def atualizar_perfil_admin(profile_id, ativo, plano):
-    url = f"{SUPABASE_URL}/rest/v1/profiles"
-    headers = {
-        "apikey": SUPABASE_KEY,
-        "Authorization": f"Bearer {st.session_state['access_token']}",
-        "Content-Type": "application/json",
-        "Prefer": "return=minimal",
-    }
-    params = {"id": f"eq.{profile_id}"}
-    dados = {
-        "ativo": bool(ativo),
-        "plano": plano,
-    }
-
-    resposta = requests.patch(
-        url,
-        headers=headers,
-        params=params,
-        json=dados,
-        timeout=20,
-    )
-    return resposta.status_code in (200, 204), resposta.text
-
-def painel_admin():
-    if not IS_ADMIN:
-        return
-
-    st.sidebar.divider()
-    with st.sidebar.expander("👑 Painel Administrativo", expanded=False):
-        st.markdown("**Controle de usuários**")
-
-        perfis, erro = buscar_todos_perfis_admin()
-
-        if erro:
-            st.warning(
-                "⚠️ O painel administrativo precisa de uma policy "
-                "para o admin consultar todos os perfis."
-            )
-            st.caption("Configure a policy no Supabase e recarregue o app.")
-            return
-
-        if not perfis:
-            st.info("Nenhum usuário encontrado.")
-            return
-
-        for perfil in perfis:
-            email = perfil.get("email") or ""
-            nome = perfil.get("nome") or email
-            plano_atual = (perfil.get("plano") or "user").lower()
-            ativo_atual = bool(perfil.get("ativo", True))
-            profile_id = perfil.get("id")
-
-            st.markdown(f"**👤 {nome}**")
-            st.caption(email)
-
-            novo_plano = st.selectbox(
-                "Plano",
-                ["user", "admin"],
-                index=0 if plano_atual != "admin" else 1,
-                key=f"admin_plano_{profile_id}",
-            )
-
-            novo_ativo = st.checkbox(
-                "Usuário ativo",
-                value=ativo_atual,
-                key=f"admin_ativo_{profile_id}",
-            )
-
-            if st.button(
-                "💾 Salvar",
-                key=f"admin_salvar_{profile_id}",
-                use_container_width=True,
-            ):
-                ok, detalhe = atualizar_perfil_admin(
-                    profile_id,
-                    novo_ativo,
-                    novo_plano,
-                )
-
-                if ok:
-                    st.success("Salvo!")
-                    if profile_id == st.session_state.get("user_id"):
-                        st.session_state["user_plano"] = novo_plano
-                        st.session_state["user_ativo"] = novo_ativo
-                    st.rerun()
-                else:
-                    st.error(f"Erro ao salvar: {detalhe}")
-
-            st.divider()
-
-# ============================================================
-# SIDEBAR: GERENCIADOR DE PROJETOS
-# ============================================================
+# --- SIDEBAR: GERENCIADOR DE PROJETOS ---
 st.sidebar.title("📁 Projetos")
-st.sidebar.caption(f"👤 {USER_NAME}")
-st.sidebar.caption(USER_EMAIL)
 
-if IS_ADMIN:
-    st.sidebar.success("👑 Administrador")
-else:
-    st.sidebar.info("👤 Usuário")
-
-if st.sidebar.button(
-    "🚪 Sair",
-    use_container_width=True,
-    key="btn_logout",
-):
-    fazer_logout()
-
-painel_admin()
-
-novo_proj_nome = st.sidebar.text_input(
-    "Novo Projeto:",
-    key="novo_projeto_nome",
-)
-
-if st.sidebar.button(
-    "➕ Criar Projeto",
-    use_container_width=True,
-    key="criar_projeto",
-):
+novo_proj_nome = st.sidebar.text_input("Novo Projeto:")
+if st.sidebar.button("➕ Criar Projeto", use_container_width=True):
     if novo_proj_nome.strip():
-        nome_limpo = re.sub(
-            r'[^\w\s-]',
-            '',
-            novo_proj_nome.strip()
-        ).replace(" ", "_")
-
-        if not nome_limpo:
-            st.sidebar.error("Nome de projeto inválido.")
-        else:
-            proj_path = os.path.join(
-                BASE_DIR,
-                nome_limpo
-            )
-
-            os.makedirs(
-                os.path.join(proj_path, "ganchos"),
-                exist_ok=True
-            )
-            os.makedirs(
-                os.path.join(proj_path, "corpos"),
-                exist_ok=True
-            )
-            os.makedirs(
-                os.path.join(proj_path, "ctas"),
-                exist_ok=True
-            )
-            os.makedirs(
-                os.path.join(proj_path, "output"),
-                exist_ok=True
-            )
-
-            st.sidebar.success(
-                f"Projeto '{nome_limpo}' criado!"
-            )
-            st.rerun()
+        nome_limpo = re.sub(r'[^\w\s-]', '', novo_proj_nome.strip()).replace(" ", "_")
+        proj_path = os.path.join(BASE_DIR, nome_limpo)
+        os.makedirs(os.path.join(proj_path, "ganchos"), exist_ok=True)
+        os.makedirs(os.path.join(proj_path, "corpos"), exist_ok=True)
+        os.makedirs(os.path.join(proj_path, "ctas"), exist_ok=True)
+        os.makedirs(os.path.join(proj_path, "output"), exist_ok=True)
+        st.sidebar.success(f"Projeto '{nome_limpo}' criado!")
+        st.rerun()
 
 st.sidebar.divider()
 
 projetos_disponiveis = listar_projetos()
-
 if not projetos_disponiveis:
-    st.warning(
-        "⚠️ Nenhum projeto encontrado. "
-        "Crie um projeto no menu lateral para começar!"
-    )
+    st.warning("⚠️ Nenhum projeto encontrado. Crie um projeto no menu lateral para começar!")
     st.stop()
 
-projeto_atual = st.sidebar.selectbox(
-    "Selecione o Projeto Ativo:",
-    projetos_disponiveis,
-    key="projeto_ativo",
-)
+projeto_atual = st.sidebar.selectbox("Selecione o Projeto Ativo:", projetos_disponiveis)
+PROJ_PATH = os.path.join(BASE_DIR, projeto_atual)
 
-PROJ_PATH = os.path.join(
-    BASE_DIR,
-    projeto_atual
-)
-
-PATH_GANCHOS = os.path.join(
-    PROJ_PATH,
-    "ganchos"
-)
-PATH_CORPOS = os.path.join(
-    PROJ_PATH,
-    "corpos"
-)
-PATH_CTAS = os.path.join(
-    PROJ_PATH,
-    "ctas"
-)
-PATH_OUTPUT = os.path.join(
-    PROJ_PATH,
-    "output"
-)
-
-for pasta in [
-    PATH_GANCHOS,
-    PATH_CORPOS,
-    PATH_CTAS,
-    PATH_OUTPUT,
-]:
-    os.makedirs(pasta, exist_ok=True)
+PATH_GANCHOS = os.path.join(PROJ_PATH, "ganchos")
+PATH_CORPOS = os.path.join(PROJ_PATH, "corpos")
+PATH_CTAS = os.path.join(PROJ_PATH, "ctas")
+PATH_OUTPUT = os.path.join(PROJ_PATH, "output")
 
 st.sidebar.divider()
 
-if st.sidebar.button(
-    "🗑️ Deletar Projeto Atual",
-    type="primary",
-    use_container_width=True,
-    key="deletar_projeto",
-):
-    shutil.rmtree(PROJ_PATH, ignore_errors=True)
-    st.sidebar.error(
-        f"Projeto '{projeto_atual}' foi apagado!"
-    )
+if st.sidebar.button("🗑️ Deletar Projeto Atual", type="primary", use_container_width=True):
+    shutil.rmtree(PROJ_PATH)
+    st.sidebar.error(f"Projeto '{projeto_atual}' foi apagado!")
     st.rerun()
-
 
 # --- FUNÇÃO: CÁLCULO DE SCORE LOCAL ---
 def calcular_score_local(texto):
@@ -563,16 +162,82 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         return False
 
 # --- FUNÇÃO: PREPARAR/TRATAR VÍDEO INDIVIDUAL DE BLOCO ---
-def processar_bloco_individual(caminho_entrada, caminho_saida, encoder_video="libx264", deve_espelhar=False):
-    filtros = []
+def executar_ffmpeg(cmd):
+    """Executa FFmpeg e devolve sucesso + mensagem de erro."""
+    try:
+        resultado = subprocess.run(
+            cmd,
+            shell=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace"
+        )
+        if resultado.returncode != 0:
+            erro = (resultado.stderr or resultado.stdout or "Erro desconhecido").strip()
+            return False, erro[-6000:]
+        return True, ""
+    except Exception as e:
+        return False, str(e)
+
+
+def video_tem_audio(caminho):
+    """Verifica se o arquivo possui pelo menos uma faixa de áudio."""
+    cmd = (
+        f'ffprobe -v error -select_streams a:0 '
+        f'-show_entries stream=index -of csv=p=0 "{caminho}"'
+    )
+    try:
+        r = subprocess.run(
+            cmd, shell=True, capture_output=True, text=True,
+            encoding="utf-8", errors="replace"
+        )
+        return r.returncode == 0 and bool(r.stdout.strip())
+    except Exception:
+        return False
+
+
+def processar_bloco_individual(
+    caminho_entrada,
+    caminho_saida,
+    encoder_video="libx264",
+    deve_espelhar=False
+):
+    """Normaliza cada bloco para 1080x1920, H.264 + AAC, pronto para concatenação."""
+
+    filtros = [
+        "scale=1080:1920:force_original_aspect_ratio=increase",
+        "crop=1080:1920",
+        "setsar=1"
+    ]
+
     if deve_espelhar:
-        filtros.append("hflip")
-    
-    if filtros:
-        cmd = f'ffmpeg -y -i "{caminho_entrada}" -vf "{",".join(filtros)}" -c:v {encoder_video} -pix_fmt yuv420p -c:a copy "{caminho_saida}"'
-        subprocess.run(cmd, shell=True)
+        filtros.insert(0, "hflip")
+
+    vf = ",".join(filtros)
+
+    # Se o bloco não tiver áudio, cria áudio silencioso com a mesma duração.
+    if video_tem_audio(caminho_entrada):
+        cmd = (
+            f'ffmpeg -y -i "{caminho_entrada}" '
+            f'-vf "{vf}" '
+            f'-c:v {encoder_video} -preset fast -pix_fmt yuv420p '
+            f'-c:a aac -ar 44100 -ac 2 '
+            f'-movflags +faststart "{caminho_saida}"'
+        )
     else:
-        shutil.copyfile(caminho_entrada, caminho_saida)
+        cmd = (
+            f'ffmpeg -y -i "{caminho_entrada}" '
+            f'-f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 '
+            f'-map 0:v:0 -map 1:a:0 '
+            f'-vf "{vf}" '
+            f'-c:v {encoder_video} -preset fast -pix_fmt yuv420p '
+            f'-c:a aac -ar 44100 -ac 2 -shortest '
+            f'-movflags +faststart "{caminho_saida}"'
+        )
+
+    return executar_ffmpeg(cmd)
+
 
 def criar_zip_projeto(pasta_output, caminho_zip):
     with zipfile.ZipFile(caminho_zip, 'w', zipfile.ZIP_DEFLATED) as zipf:
@@ -716,124 +381,254 @@ st.divider()
 
 # --- BOTÃO DE PROCESSAMENTO ---
 if st.button("🚀 Multiplicar e Gerar Todos os Vídeos", type="primary", use_container_width=True):
-    list_h = [os.path.join(PATH_GANCHOS, f) for f in os.listdir(PATH_GANCHOS) if f.endswith(('mp4', 'mov'))]
-    list_m = [os.path.join(PATH_CORPOS, f) for f in os.listdir(PATH_CORPOS) if f.endswith(('mp4', 'mov'))]
-    list_c = [os.path.join(PATH_CTAS, f) for f in os.listdir(PATH_CTAS) if f.endswith(('mp4', 'mov'))]
+    list_h = sorted([
+        os.path.join(PATH_GANCHOS, f)
+        for f in os.listdir(PATH_GANCHOS)
+        if f.lower().endswith((".mp4", ".mov"))
+    ])
+    list_m = sorted([
+        os.path.join(PATH_CORPOS, f)
+        for f in os.listdir(PATH_CORPOS)
+        if f.lower().endswith((".mp4", ".mov"))
+    ])
+    list_c = sorted([
+        os.path.join(PATH_CTAS, f)
+        for f in os.listdir(PATH_CTAS)
+        if f.lower().endswith((".mp4", ".mov"))
+    ])
 
-    if len(list_h) < 1 or len(list_m) < 1 or len(list_c) < 1:
-        st.error("Adicione pelo menos 1 vídeo em cada uma das 3 colunas para gerar!")
+    if not list_h or not list_m or not list_c:
+        st.error("❌ Adicione pelo menos 1 vídeo em cada coluna: Gancho, Corpo e CTA.")
     else:
-        lista_hooks = [linha.strip().upper() for linha in texto_manchete.split('\n') if linha.strip()]
+        lista_hooks = [
+            linha.strip().upper()
+            for linha in texto_manchete.split("\n")
+            if linha.strip()
+        ]
 
         combos = list(itertools.product(list_h, list_m, list_c))
-        st.success(f"🔥 Gerando {len(combos)} vídeo(s) com Encoder [{encoder_escolhido}]...")
+        total = len(combos)
+
+        st.info(
+            f"🎬 **{len(list_h)} Hook(s) × {len(list_m)} Corpo(s) × "
+            f"{len(list_c)} CTA(s) = {total} vídeo(s)**"
+        )
+
         prog = st.progress(0)
+        status = st.empty()
+        erros = []
+        gerados = 0
+
+        # Remove MP4 antigos para a galeria representar somente esta geração.
+        for antigo in os.listdir(PATH_OUTPUT):
+            if antigo.lower().endswith(".mp4"):
+                try:
+                    os.remove(os.path.join(PATH_OUTPUT, antigo))
+                except Exception:
+                    pass
 
         for idx, (h, m, c) in enumerate(combos):
-            print(f"\n=================== PROCESSANDO VARIAÇÃO {idx+1}/{len(combos)} ===================")
-            out_final = os.path.abspath(os.path.join(PATH_OUTPUT, f"video_final_{idx+1}.mp4"))
-            
-            # Arquivos temporários dos blocos com espelhamento aleatório
+            numero = idx + 1
+            status.write(f"⏳ Gerando **{numero}/{total}**...")
+
+            out_final = os.path.abspath(
+                os.path.join(PATH_OUTPUT, f"video_final_{numero:03d}.mp4")
+            )
+
             h_tmp = os.path.abspath(os.path.join(PROJ_PATH, f"tmp_h_{idx}.mp4"))
             m_tmp = os.path.abspath(os.path.join(PROJ_PATH, f"tmp_m_{idx}.mp4"))
             c_tmp = os.path.abspath(os.path.join(PROJ_PATH, f"tmp_c_{idx}.mp4"))
-
-            # Sorteio de espelhamento por bloco
-            esp_h = random.choice([True, False]) if espelhar_blocos_rand else False
-            esp_m = random.choice([True, False]) if espelhar_blocos_rand else False
-            esp_c = random.choice([True, False]) if espelhar_blocos_rand else False
-
-            processar_bloco_individual(h, h_tmp, encoder_escolhido, esp_h)
-            processar_bloco_individual(m, m_tmp, encoder_escolhido, esp_m)
-            processar_bloco_individual(c, c_tmp, encoder_escolhido, esp_c)
-
             concat_list = os.path.abspath(os.path.join(PROJ_PATH, f"list_{idx}.txt"))
-            with open(concat_list, "w", encoding="utf-8") as f:
-                f.write(f"file '{h_tmp}'\nfile '{m_tmp}'\nfile '{c_tmp}'\n")
 
-            # 1. PASSO 1: Concatenação segura com re-encodamento
-            cmd_concat = f'ffmpeg -y -f concat -safe 0 -i "{concat_list}" -c:v {encoder_escolhido} -pix_fmt yuv420p -c:a aac "{out_final}"'
-            subprocess.run(cmd_concat, shell=True)
+            try:
+                esp_h = random.choice([True, False]) if espelhar_blocos_rand else False
+                esp_m = random.choice([True, False]) if espelhar_blocos_rand else False
+                esp_c = random.choice([True, False]) if espelhar_blocos_rand else False
 
-            # Remover blocos temporários
-            for t_b in [h_tmp, m_tmp, c_tmp]:
-                if os.path.exists(t_b): os.remove(t_b)
+                ok, erro = processar_bloco_individual(h, h_tmp, encoder_escolhido, esp_h)
+                if not ok:
+                    raise RuntimeError(f"HOOK: {erro}")
 
-            if not os.path.exists(out_final):
-                st.error(f"Erro ao concatenar variação {idx+1}. Mude para 'CPU Padrão' nas opções!")
-                continue
+                ok, erro = processar_bloco_individual(m, m_tmp, encoder_escolhido, esp_m)
+                if not ok:
+                    raise RuntimeError(f"CORPO: {erro}")
 
-            # 2. PASSO 2: Legendas Word Pop ASS
-            ass_file = os.path.abspath(os.path.join(PROJ_PATH, f"temp_{idx}.ass"))
-            if legenda_ativa:
-                has_leg = gerar_legenda_ass(out_final, ass_file, posicao_v=posicao_legenda_v, tamanho_fonte=tamanho_legenda)
-                if has_leg and os.path.exists(ass_file):
-                    temp_leg = os.path.abspath(os.path.join(PROJ_PATH, f"temp_leg_{idx}.mp4"))
-                    ass_path_clean = ass_file.replace("\\", "/").replace(":", "\\:")
-                    cmd_leg = f'ffmpeg -y -i "{out_final}" -vf "subtitles=\'{ass_path_clean}\'" -c:v {encoder_escolhido} -pix_fmt yuv420p -c:a copy "{temp_leg}"'
-                    subprocess.run(cmd_leg, shell=True)
-                    if os.path.exists(temp_leg):
-                        shutil.move(temp_leg, out_final)
+                ok, erro = processar_bloco_individual(c, c_tmp, encoder_escolhido, esp_c)
+                if not ok:
+                    raise RuntimeError(f"CTA: {erro}")
 
-            # 3. PASSO 3: Hook Inclinado no Topo
-            if hook_ativo and lista_hooks:
-                hook_selecionado = lista_hooks[idx % len(lista_hooks)]
-                hook_ass_file = os.path.abspath(os.path.join(PROJ_PATH, f"temp_hook_{idx}.ass"))
-                gerar_hook_ass(hook_selecionado, hook_ass_file, posicao_y=posicao_hook_y, tamanho_fonte=tamanho_hook)
-                
-                if os.path.exists(hook_ass_file):
-                    temp_hk = os.path.abspath(os.path.join(PROJ_PATH, f"temp_hk_{idx}.mp4"))
-                    hook_path_clean = hook_ass_file.replace("\\", "/").replace(":", "\\:")
-                    cmd_hk = f'ffmpeg -y -i "{out_final}" -vf "subtitles=\'{hook_path_clean}\'" -c:v {encoder_escolhido} -pix_fmt yuv420p -c:a copy "{temp_hk}"'
-                    subprocess.run(cmd_hk, shell=True)
-                    if os.path.exists(temp_hk):
-                        shutil.move(temp_hk, out_final)
-                    if os.path.exists(hook_ass_file): os.remove(hook_ass_file)
+                # Os três arquivos já estão normalizados para o mesmo padrão.
+                with open(concat_list, "w", encoding="utf-8") as f:
+                    for caminho in (h_tmp, m_tmp, c_tmp):
+                        f.write(f"file '{caminho.replace(chr(92), '/')}'\n")
 
-            # 4. PASSO 4: MODIFICADORES VISUAIS ESTÁVEIS
-            if auto_ultra_anti_dup:
-                filtros_v = []
-
-                # Pan & Scan seguro (Redimensiona sempre para 1080x1920 no final)
-                factor = round(random.uniform(0.85, 0.95), 2)
-                filtros_v.append(f"crop=iw*{factor}:ih*{factor}")
-                filtros_v.append("scale=1080:1920")
-
-                # GRADAÇÃO DINÂMICA DE COR ESTÁVEL
-                color_preset = random.choice([
-                    "eq=brightness=0.02:contrast=1.05:saturation=1.04",
-                    "eq=brightness=-0.015:contrast=1.07:saturation=0.96",
-                    "eq=brightness=0.01:contrast=1.03:saturation=1.08",
-                    "eq=brightness=-0.005:contrast=1.06:saturation=1.00",
-                    "eq=brightness=0.025:contrast=1.02:saturation=0.95",
-                    "eq=brightness=-0.02:contrast=1.04:saturation=1.05",
-                ])
-                filtros_v.append(color_preset)
-
-                temp_filt = os.path.abspath(os.path.join(PROJ_PATH, f"temp_filt_{idx}.mp4"))
-                
-                cmd_v_str = f'-vf "{",".join(filtros_v)}"'
-
-                cmd_filt = (
-                    f'ffmpeg -y -i "{out_final}" {cmd_v_str} -c:v {encoder_escolhido} -pix_fmt yuv420p -c:a copy '
-                    f'-metadata title="" -metadata comment="" -metadata encoder="Apple iOS Camera 17.4.1" '
-                    f'"{temp_filt}"'
+                cmd_concat = (
+                    f'ffmpeg -y -f concat -safe 0 -i "{concat_list}" '
+                    f'-c:v {encoder_escolhido} -preset fast -pix_fmt yuv420p '
+                    f'-c:a aac -ar 44100 -ac 2 -movflags +faststart '
+                    f'"{out_final}"'
                 )
-                print(f"Aplicando Modulação Visual Anti-Duplicidade: {cmd_filt}")
-                subprocess.run(cmd_filt, shell=True)
 
-                if os.path.exists(temp_filt):
-                    shutil.move(temp_filt, out_final)
+                ok, erro = executar_ffmpeg(cmd_concat)
+                if not ok or not os.path.exists(out_final):
+                    raise RuntimeError(f"CONCATENAÇÃO: {erro}")
 
-            # Limpeza de temporários
-            for t_file in [concat_list, ass_file]:
-                if os.path.exists(t_file): os.remove(t_file)
+                # Legendas automáticas
+                ass_file = os.path.abspath(os.path.join(PROJ_PATH, f"temp_{idx}.ass"))
 
-            prog.progress((idx + 1) / len(combos))
+                if legenda_ativa:
+                    has_leg = gerar_legenda_ass(
+                        out_final,
+                        ass_file,
+                        posicao_v=posicao_legenda_v,
+                        tamanho_fonte=tamanho_legenda
+                    )
 
-        st.balloons()
-        st.success(f"🎉 {len(combos)} vídeo(s) gerados com sucesso!")
-        st.rerun()
+                    if has_leg and os.path.exists(ass_file):
+                        temp_leg = os.path.abspath(
+                            os.path.join(PROJ_PATH, f"temp_leg_{idx}.mp4")
+                        )
+                        ass_path_clean = ass_file.replace("\\", "/").replace(":", "\\:")
+
+                        cmd_leg = (
+                            f'ffmpeg -y -i "{out_final}" '
+                            f'-vf "subtitles=\'{ass_path_clean}\'" '
+                            f'-c:v {encoder_escolhido} -preset fast '
+                            f'-pix_fmt yuv420p -c:a aac -ar 44100 -ac 2 '
+                            f'-movflags +faststart "{temp_leg}"'
+                        )
+
+                        ok_leg, erro_leg = executar_ffmpeg(cmd_leg)
+
+                        if ok_leg and os.path.exists(temp_leg):
+                            os.replace(temp_leg, out_final)
+                        elif not ok_leg:
+                            st.warning(
+                                f"⚠️ Legenda não aplicada no vídeo {numero}: {erro_leg}"
+                            )
+
+                # Hook escrito no topo
+                if hook_ativo and lista_hooks:
+                    hook_selecionado = lista_hooks[idx % len(lista_hooks)]
+                    hook_ass_file = os.path.abspath(
+                        os.path.join(PROJ_PATH, f"temp_hook_{idx}.ass")
+                    )
+
+                    gerar_hook_ass(
+                        hook_selecionado,
+                        hook_ass_file,
+                        posicao_y=posicao_hook_y,
+                        tamanho_fonte=tamanho_hook
+                    )
+
+                    if os.path.exists(hook_ass_file):
+                        temp_hk = os.path.abspath(
+                            os.path.join(PROJ_PATH, f"temp_hk_{idx}.mp4")
+                        )
+                        hook_path_clean = hook_ass_file.replace("\\", "/").replace(":", "\\:")
+
+                        cmd_hk = (
+                            f'ffmpeg -y -i "{out_final}" '
+                            f'-vf "subtitles=\'{hook_path_clean}\'" '
+                            f'-c:v {encoder_escolhido} -preset fast '
+                            f'-pix_fmt yuv420p -c:a aac -ar 44100 -ac 2 '
+                            f'-movflags +faststart "{temp_hk}"'
+                        )
+
+                        ok_hk, erro_hk = executar_ffmpeg(cmd_hk)
+
+                        if ok_hk and os.path.exists(temp_hk):
+                            os.replace(temp_hk, out_final)
+                        elif not ok_hk:
+                            st.warning(
+                                f"⚠️ Hook não aplicado no vídeo {numero}: {erro_hk}"
+                            )
+
+                # Anti-duplicidade
+                if auto_ultra_anti_dup and os.path.exists(out_final):
+                    factor = round(random.uniform(0.85, 0.95), 2)
+
+                    filtros_v = [
+                        f"crop=iw*{factor}:ih*{factor}",
+                        "scale=1080:1920",
+                        random.choice([
+                            "eq=brightness=0.02:contrast=1.05:saturation=1.04",
+                            "eq=brightness=-0.015:contrast=1.07:saturation=0.96",
+                            "eq=brightness=0.01:contrast=1.03:saturation=1.08",
+                            "eq=brightness=-0.005:contrast=1.06:saturation=1.00",
+                            "eq=brightness=0.025:contrast=1.02:saturation=0.95",
+                            "eq=brightness=-0.02:contrast=1.04:saturation=1.05"
+                        ])
+                    ]
+
+                    temp_filt = os.path.abspath(
+                        os.path.join(PROJ_PATH, f"temp_filt_{idx}.mp4")
+                    )
+
+                    cmd_filt = (
+                        f'ffmpeg -y -i "{out_final}" '
+                        f'-vf "{",".join(filtros_v)}" '
+                        f'-c:v {encoder_escolhido} -preset fast '
+                        f'-pix_fmt yuv420p -c:a aac -ar 44100 -ac 2 '
+                        f'-movflags +faststart "{temp_filt}"'
+                    )
+
+                    ok_filt, erro_filt = executar_ffmpeg(cmd_filt)
+
+                    if ok_filt and os.path.exists(temp_filt):
+                        os.replace(temp_filt, out_final)
+                    elif not ok_filt:
+                        st.warning(
+                            f"⚠️ Anti-duplicidade não aplicado no vídeo {numero}: "
+                            f"{erro_filt}"
+                        )
+
+                if not os.path.exists(out_final) or os.path.getsize(out_final) < 1000:
+                    raise RuntimeError("FFmpeg terminou sem criar um MP4 válido.")
+
+                gerados += 1
+                status.write(f"✅ **{numero}/{total}** concluído.")
+
+            except Exception as e:
+                erros.append(f"Vídeo {numero}: {e}")
+                st.error(f"❌ Vídeo {numero} falhou.")
+                with st.expander(f"🔎 Ver erro do vídeo {numero}"):
+                    st.code(str(e))
+
+            finally:
+                temporarios = [
+                    h_tmp, m_tmp, c_tmp, concat_list,
+                    os.path.join(PROJ_PATH, f"temp_{idx}.ass"),
+                    os.path.join(PROJ_PATH, f"temp_hook_{idx}.ass"),
+                    os.path.join(PROJ_PATH, f"temp_leg_{idx}.mp4"),
+                    os.path.join(PROJ_PATH, f"temp_hk_{idx}.mp4"),
+                    os.path.join(PROJ_PATH, f"temp_filt_{idx}.mp4")
+                ]
+
+                for t_file in temporarios:
+                    if os.path.exists(t_file):
+                        try:
+                            os.remove(t_file)
+                        except Exception:
+                            pass
+
+            prog.progress(numero / total)
+
+        status.empty()
+
+        if gerados == total:
+            st.balloons()
+            st.success(f"🎉 **{gerados}/{total} vídeos gerados com sucesso!**")
+        elif gerados > 0:
+            st.warning(f"⚠️ **{gerados}/{total} vídeos foram gerados.**")
+            with st.expander("🔎 Ver todos os erros"):
+                for erro in erros:
+                    st.code(erro)
+        else:
+            st.error("❌ **Nenhum vídeo foi gerado.**")
+            st.write("Veja o erro exibido em cada vídeo acima para identificar exatamente o problema.")
+
+        # Não força rerun aqui: assim os erros ficam visíveis na tela.
 
 st.divider()
 
