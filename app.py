@@ -9,6 +9,7 @@ import re
 import random
 import requests
 from faster_whisper import WhisperModel
+from storage_ui import save_uploaded_files
 
 # ============================================================
 # CONFIGURAÇÃO DA PÁGINA
@@ -593,12 +594,15 @@ st.caption("Multiplicador Modular de Vídeos Localhost (Estável & Seguro)")
 
 st.divider()
 
-def salvar_arquivos(files, destino):
-    for f in files:
-        nome_limpo = re.sub(r'[^\w\.-]', '_', f.name)
-        path = os.path.join(destino, nome_limpo)
-        with open(path, "wb") as buffer:
-            buffer.write(f.getbuffer())
+def salvar_arquivos(files, destino, storage_subfolder):
+    return save_uploaded_files(
+        files,
+        destino,
+        user_id=USER_ID,
+        project_name=projeto_atual,
+        storage_subfolder=storage_subfolder,
+        access_token=st.session_state.get("access_token"),
+    )
 
 # --- 1. UPLOAD E LIMPEZA DOS BLOCOS DE VÍDEO ---
 st.subheader("1. Gerenciamento dos Blocos de Vídeo")
@@ -607,7 +611,8 @@ col1, col2, col3 = st.columns(3)
 with col1:
     st.markdown("### 🪝 Ganchos")
     files_h = st.file_uploader("Subir Ganchos", accept_multiple_files=True, type=["mp4", "mov"], key="u_h")
-    if files_h: salvar_arquivos(files_h, PATH_GANCHOS)
+    if files_h:
+        salvar_arquivos(files_h, PATH_GANCHOS, "ganchos")
     arquivos_h = [f for f in os.listdir(PATH_GANCHOS) if f.endswith(('mp4', 'mov'))]
     if len(arquivos_h) < 1: st.warning("⚠️ Nenhum vídeo")
     else: st.success(f"✅ {len(arquivos_h)} Ganchos")
@@ -619,7 +624,8 @@ with col1:
 with col2:
     st.markdown("### 📹 Corpos")
     files_m = st.file_uploader("Subir Corpos", accept_multiple_files=True, type=["mp4", "mov"], key="u_m")
-    if files_m: salvar_arquivos(files_m, PATH_CORPOS)
+    if files_m:
+        salvar_arquivos(files_m, PATH_CORPOS, "corpos")
     arquivos_m = [f for f in os.listdir(PATH_CORPOS) if f.endswith(('mp4', 'mov'))]
     if len(arquivos_m) < 1: st.warning("⚠️ Nenhum vídeo")
     else: st.success(f"✅ {len(arquivos_m)} Corpos")
@@ -631,7 +637,8 @@ with col2:
 with col3:
     st.markdown("### 📢 CTAs")
     files_c = st.file_uploader("Subir CTAs", accept_multiple_files=True, type=["mp4", "mov"], key="u_c")
-    if files_c: salvar_arquivos(files_c, PATH_CTAS)
+    if files_c:
+        salvar_arquivos(files_c, PATH_CTAS, "ctas")
     arquivos_c = [f for f in os.listdir(PATH_CTAS) if f.endswith(('mp4', 'mov'))]
     if len(arquivos_c) < 1: st.warning("⚠️ Nenhum vídeo")
     else: st.success(f"✅ {len(arquivos_c)} CTAs")
