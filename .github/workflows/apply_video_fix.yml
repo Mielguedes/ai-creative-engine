@@ -1,0 +1,31 @@
+name: Apply video effects fix
+
+on:
+  push:
+    paths:
+      - 'scripts/fix_video_effects.py'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Apply patch
+        run: python scripts/fix_video_effects.py
+
+      - name: Commit patched app
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.py
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Fix Hook and automatic subtitle rendering"
+            git push
+          fi
