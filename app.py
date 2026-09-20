@@ -11,6 +11,7 @@ import requests
 from faster_whisper import WhisperModel
 from storage_ui import save_uploaded_files
 from storage_sync import project_prefix, restore_file_from_storage, sync_project_to_storage
+from access_control import check_user_access
 
 # ============================================================
 # CONFIGURAÇÃO DA PÁGINA
@@ -188,6 +189,25 @@ USER_EMAIL = st.session_state["user_email"]
 USER_NAME = st.session_state.get("user_name") or USER_EMAIL
 USER_PLANO = st.session_state.get("user_plano", "user").lower()
 IS_ADMIN = USER_PLANO == "admin"
+
+
+# ============================================================
+# CONTROLE OPCIONAL DE ACESSO DOS COMPRADORES
+# ============================================================
+_access_allowed, _access_message, _access_record = check_user_access(
+    st=st,
+    supabase_url=SUPABASE_URL,
+    supabase_key=SUPABASE_KEY,
+    access_token=st.session_state.get("access_token", ""),
+    user_id=USER_ID,
+)
+if not _access_allowed:
+    st.error(f"🔒 {_access_message}")
+    st.info("Se você acredita que isso é um engano, entre em contato com o suporte.")
+    st.stop()
+
+if _access_record:
+    st.session_state["user_plano"] = str(_access_record.get("plan") or "user")
 
 # ============================================================
 # ESTRUTURA DE PASTAS E PROJETOS
