@@ -20,9 +20,18 @@ class StorageError(RuntimeError):
 _CONFIG: dict[str, str] = {}
 
 
+def _normalize_url(url: str) -> str:
+    """Return the Supabase project URL without API path suffixes."""
+    clean = (url or "").strip().rstrip("/")
+    for suffix in ("/rest/v1", "/storage/v1", "/auth/v1"):
+        if clean.endswith(suffix):
+            clean = clean[: -len(suffix)].rstrip("/")
+    return clean
+
+
 def configure(url: str, key: str, bucket: str = "ai-creative-engine") -> None:
     """Configure Storage explicitly, preferably once after user login."""
-    _CONFIG["url"] = (url or "").strip().rstrip("/")
+    _CONFIG["url"] = _normalize_url(url)
     _CONFIG["key"] = (key or "").strip()
     _CONFIG["bucket"] = (bucket or "").strip()
 
@@ -50,22 +59,25 @@ def _config() -> tuple[str, str, str]:
             "Configure SUPABASE_URL, SUPABASE_KEY and SUPABASE_STORAGE_BUCKET."
         )
 
-    return url.rstrip("/"), key, bucket
+    return _normalize_url(url), key, bucket.strip()
 
 
 def _headers(access_token: Optional[str] = None) -> dict[str, str]:
     _, key, _ = _config()
-    headers = {
+    return {
         "apikey": key,
         "Content-Type": "application/octet-stream",
         "Authorization": f"Bearer {access_token or key}",
     }
-    return headers
 
 
 def _object_url(object_path: str) -> str:
     url, _, bucket = _config()
-    clean_path = "/".join(part for part in object_path.strip("/").split("/") if part not in ("", ".", ".."))
+    clean_path = "/".join(
+        part
+        for part in object_path.strip("/").split("/")
+        if part not in ("", ".", "..")
+    )
     if not clean_path:
         raise StorageError("object_path cannot be empty.")
     return f"{url}/storage/v1/object/{bucket}/{clean_path}"
