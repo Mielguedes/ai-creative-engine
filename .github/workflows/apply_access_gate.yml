@@ -1,0 +1,33 @@
+name: Apply buyer access control
+
+on:
+  push:
+    paths:
+      - 'scripts/add_access_gate.py'
+      - 'access_control.py'
+      - '.github/workflows/apply_access_gate.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Apply access gate
+        run: python scripts/add_access_gate.py
+
+      - name: Commit patched app
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.py
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Add optional buyer access gate"
+            git push
+          fi
