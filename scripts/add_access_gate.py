@@ -12,11 +12,12 @@ if import_line not in text:
 
 gate = '''\n# ============================================================\n# CONTROLE OPCIONAL DE ACESSO DOS COMPRADORES\n# ============================================================\n_access_allowed, _access_message, _access_record = check_user_access(\n    st=st,\n    supabase_url=SUPABASE_URL,\n    supabase_key=SUPABASE_KEY,\n    access_token=st.session_state.get("access_token", ""),\n    user_id=USER_ID,\n)\nif not _access_allowed:\n    st.error(f"🔒 {_access_message}")\n    st.info("Se você acredita que isso é um engano, entre em contato com o suporte.")\n    st.stop()\n\nif _access_record:\n    st.session_state["user_plano"] = str(_access_record.get("plan") or "user")\n\n'''
 
-marker = '# ============================================================\n# ESTRUTURA DE PASTAS E PROJETOS'
 if 'check_user_access(' not in text:
+    marker = '# ============================================================\n# ESTRUTURA DE PASTAS E PROJETOS'
     if marker not in text:
         raise SystemExit('Gate insertion marker not found')
     text = text.replace(marker, gate + marker, 1)
 
 app.write_text(text, encoding='utf-8')
 print('Access gate added')
+# workflow trigger marker
