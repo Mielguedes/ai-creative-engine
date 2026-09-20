@@ -1,7 +1,7 @@
 """Helpers for persistent Supabase Storage files.
 
-This module is intentionally independent from the Streamlit UI so it can be
-integrated incrementally without changing the current rendering flow.
+The module remains independent from the Streamlit UI and supports either
+explicit configuration, environment variables, or Streamlit secrets.
 """
 
 from __future__ import annotations
@@ -17,17 +17,40 @@ class StorageError(RuntimeError):
     """Raised when a Supabase Storage operation fails."""
 
 
+_CONFIG: dict[str, str] = {}
+
+
+def configure(url: str, key: str, bucket: str = "ai-creative-engine") -> None:
+    """Configure Storage explicitly, preferably once after user login."""
+    _CONFIG["url"] = (url or "").strip().rstrip("/")
+    _CONFIG["key"] = (key or "").strip()
+    _CONFIG["bucket"] = (bucket or "").strip()
+
+
+def _secret(name: str) -> str:
+    value = os.getenv(name, "").strip()
+    if value:
+        return value
+
+    try:
+        import streamlit as st
+
+        return str(st.secrets.get(name, "")).strip()
+    except Exception:
+        return ""
+
+
 def _config() -> tuple[str, str, str]:
-    url = os.getenv("SUPABASE_URL", "").strip().rstrip("/")
-    key = os.getenv("SUPABASE_KEY", "").strip()
-    bucket = os.getenv("SUPABASE_STORAGE_BUCKET", "ai-creative-engine").strip()
+    url = _CONFIG.get("url") or _secret("SUPABASE_URL")
+    key = _CONFIG.get("key") or _secret("SUPABASE_KEY")
+    bucket = _CONFIG.get("bucket") or _secret("SUPABASE_STORAGE_BUCKET") or "ai-creative-engine"
 
     if not url or not key or not bucket:
         raise StorageError(
             "Configure SUPABASE_URL, SUPABASE_KEY and SUPABASE_STORAGE_BUCKET."
         )
 
-    return url, key, bucket
+    return url.rstrip("/"), key, bucket
 
 
 def _headers(access_token: Optional[str] = None) -> dict[str, str]:
@@ -35,17 +58,14 @@ def _headers(access_token: Optional[str] = None) -> dict[str, str]:
     headers = {
         "apikey": key,
         "Content-Type": "application/octet-stream",
+        "Authorization": f"Bearer {access_token or key}",
     }
-    if access_token:
-        headers["Authorization"] = f"Bearer {access_token}"
-    else:
-        headers["Authorization"] = f"Bearer {key}"
     return headers
 
 
 def _object_url(object_path: str) -> str:
     url, _, bucket = _config()
-    clean_path = object_path.strip("/")
+    clean_path = "/".join(part for part in object_path.strip("/").split("/") if part not in ("", ".", ".."))
     if not clean_path:
         raise StorageError("object_path cannot be empty.")
     return f"{url}/storage/v1/object/{bucket}/{clean_path}"
@@ -57,14 +77,13 @@ def upload_file(
     access_token: Optional[str] = None,
     overwrite: bool = True,
 ) -> None:
-    """Upload one local file to the configured private bucket."""
+    """Upload one local file to the configured bucket."""
     path = Path(local_path)
     if not path.is_file():
         raise StorageError(f"Local file not found: {path}")
 
     headers = _headers(access_token)
     headers["x-upsert"] = "true" if overwrite else "false"
-    headers["Content-Type"] = "application/octet-stream"
 
     with path.open("rb") as stream:
         response = requests.post(
@@ -76,8 +95,7 @@ def upload_file(
 
     if response.status_code not in (200, 201):
         raise StorageError(
-            f"Storage upload failed ({response.status_code}): "
-            f"{response.text[:1000]}"
+            f"Storage upload failed ({response.status_code}): {response.text[:1000]}"
         )
 
 
@@ -99,8 +117,7 @@ def download_file(
 
     if response.status_code != 200:
         raise StorageError(
-            f"Storage download failed ({response.status_code}): "
-            f"{response.text[:1000]}"
+            f"Storage download failed ({response.status_code}): {response.text[:1000]}"
         )
 
     with destination.open("wb") as stream:
@@ -111,10 +128,7 @@ def download_file(
     return destination
 
 
-def delete_file(
-    object_path: str,
-    access_token: Optional[str] = None,
-) -> None:
+def delete_file(object_path: str, access_token: Optional[str] = None) -> None:
     """Delete one object from the configured bucket."""
     response = requests.delete(
         _object_url(object_path),
@@ -124,6 +138,5 @@ def delete_file(
 
     if response.status_code not in (200, 204):
         raise StorageError(
-            f"Storage delete failed ({response.status_code}): "
-            f"{response.text[:1000]}"
+            f"Storage delete failed ({response.status_code}): {response.text[:1000]}"
         )
