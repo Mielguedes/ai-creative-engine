@@ -1,6 +1,8 @@
 -- Execute este SQL uma única vez no SQL Editor do Supabase.
 -- O e-mail precisa pertencer a uma conta já criada em Authentication > Users.
 
+DROP FUNCTION IF EXISTS public.admin_upsert_access_by_email(TEXT, BOOLEAN, TEXT);
+
 CREATE OR REPLACE FUNCTION public.admin_upsert_access_by_email(
     p_email TEXT,
     p_enabled BOOLEAN DEFAULT TRUE,
@@ -36,11 +38,10 @@ BEGIN
         RAISE EXCEPTION 'Plano inválido: %', p_plan;
     END IF;
 
-    SELECT id
-      INTO v_user_id
-      FROM auth.users
-     WHERE lower(email) = lower(btrim(p_email))
-     LIMIT 1;
+    SELECT id INTO v_user_id
+    FROM auth.users
+    WHERE lower(email) = lower(btrim(p_email))
+    LIMIT 1;
 
     IF v_user_id IS NULL THEN
         RAISE EXCEPTION 'Este e-mail ainda não possui uma conta no Supabase Auth';
