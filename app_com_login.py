@@ -21,20 +21,12 @@ LEGACY_MARKER = "# --- ESTRUTURA DE PASTAS E PROJETOS ---"
 
 
 def config():
-    return (
-        st.secrets.get("SUPABASE_URL", "").rstrip("/"),
-        st.secrets.get("SUPABASE_ANON_KEY", ""),
-    )
+    return (st.secrets.get("SUPABASE_URL", "").rstrip("/"), st.secrets.get("SUPABASE_ANON_KEY", ""))
 
 
 def auth_headers(token=None):
     url, anon_key = config()
-    headers = {
-        "apikey": anon_key,
-        "Authorization": f"Bearer {token}" if token else f"Bearer {anon_key}",
-        "Content-Type": "application/json",
-    }
-    return url, headers
+    return url, {"apikey": anon_key, "Authorization": f"Bearer {token}" if token else f"Bearer {anon_key}", "Content-Type": "application/json"}
 
 
 def login_supabase(email, password):
@@ -42,12 +34,7 @@ def login_supabase(email, password):
     if not url or not headers["apikey"]:
         return None, "Configure SUPABASE_URL e SUPABASE_ANON_KEY nos Secrets."
     try:
-        response = requests.post(
-            f"{url}/auth/v1/token?grant_type=password",
-            headers=headers,
-            json={"email": email, "password": password},
-            timeout=20,
-        )
+        response = requests.post(f"{url}/auth/v1/token?grant_type=password", headers=headers, json={"email": email, "password": password}, timeout=20)
         if response.ok:
             return response.json(), None
         return None, "E-mail ou senha inválidos."
@@ -58,12 +45,7 @@ def login_supabase(email, password):
 def _query_access(token, params):
     url, headers = auth_headers(token)
     try:
-        response = requests.get(
-            f"{url}/rest/v1/app_access",
-            headers={**headers, "Accept": "application/json"},
-            params=params,
-            timeout=20,
-        )
+        response = requests.get(f"{url}/rest/v1/app_access", headers={**headers, "Accept": "application/json"}, params=params, timeout=20)
         if response.ok:
             records = response.json()
             return records[0] if records else None
@@ -73,24 +55,8 @@ def _query_access(token, params):
 
 
 def access_record(token, user_id, email):
-    record = _query_access(
-        token,
-        {
-            "select": "user_id,email,enabled,plan,expires_at",
-            "user_id": f"eq.{user_id}",
-            "limit": "1",
-        },
-    )
-    if record:
-        return record
-    return _query_access(
-        token,
-        {
-            "select": "user_id,email,enabled,plan,expires_at",
-            "email": f"eq.{email}",
-            "limit": "1",
-        },
-    )
+    record = _query_access(token, {"select": "user_id,email,enabled,plan,expires_at", "user_id": f"eq.{user_id}", "limit": "1"})
+    return record or _query_access(token, {"select": "user_id,email,enabled,plan,expires_at", "email": f"eq.{email}", "limit": "1"})
 
 
 def access_is_valid(record):
@@ -127,16 +93,7 @@ def show_login():
         if not access_is_valid(record):
             st.error("Sua conta não possui acesso ativo ou está vencida.")
             return False
-        st.session_state.update(
-            autenticado=True,
-            auth_ok=True,
-            access_token=session.get("access_token", ""),
-            refresh_token=session.get("refresh_token", ""),
-            user_id=user_id,
-            user_email=user_email,
-            user_plano=record.get("plan", "monthly"),
-            user_ativo=record.get("enabled", False),
-        )
+        st.session_state.update(autenticado=True, auth_ok=True, access_token=session.get("access_token", ""), refresh_token=session.get("refresh_token", ""), user_id=user_id, user_email=user_email, user_plano=record.get("plan", "monthly"), user_ativo=record.get("enabled", False))
         st.rerun()
     return False
 
@@ -155,6 +112,14 @@ if not access_is_valid(record):
     st.stop()
 
 is_admin = record.get("plan") == "admin"
+# Variáveis esperadas pelo núcleo restaurado.
+SUPABASE_URL, SUPABASE_KEY = config()
+USER_ID = user_id
+USER_EMAIL = user_email
+USER_NAME = user_email
+USER_PLANO = record.get("plan", "monthly").lower()
+IS_ADMIN = is_admin
+
 st.sidebar.success(f"Conectado: {user_email}")
 st.sidebar.caption(f"Plano: {record.get('plan', 'monthly')}")
 if st.sidebar.button("🚪 Sair", use_container_width=True):
@@ -165,30 +130,26 @@ render_admin_panel(access_token, is_admin)
 
 
 def carregar_multiplicador():
-    """Carrega o núcleo do multiplicador sem depender exclusivamente da internet."""
-    fontes = []
-    local_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "multiplicador_core.py")
-    if os.path.isfile(local_path):
-        fontes.append(("arquivo local", local_path))
-    fontes.append(("arquivo legado", LEGACY_SOURCE_URL))
-
+    fontes = [
+        ("arquivo local restaurado", os.path.join(os.path.dirname(os.path.abspath(__file__)), "app_restauracao_storage_final.py")),
+        ("arquivo legado remoto", LEGACY_SOURCE_URL),
+    ]
     ultimo_erro = None
     for origem, fonte in fontes:
         try:
-            if origem == "arquivo local":
-                source = open(fonte, "r", encoding="utf-8").read()
+            if origem.startswith("arquivo local"):
+                with open(fonte, "r", encoding="utf-8") as arquivo:
+                    source = arquivo.read()
             else:
                 response = requests.get(fonte, timeout=30)
                 response.raise_for_status()
                 source = response.text
-
             marker_position = source.find(LEGACY_MARKER)
             if marker_position < 0:
                 raise RuntimeError("marcador do núcleo do multiplicador não encontrado")
             return source[marker_position:]
         except Exception as error:
             ultimo_erro = error
-
     raise RuntimeError(str(ultimo_erro or "fonte indisponível"))
 
 
@@ -197,5 +158,5 @@ try:
     exec(compile(legacy_functional_source, "legacy_multiplicador.py", "exec"), globals(), globals())
 except Exception as error:
     st.error(f"Não foi possível carregar o módulo do multiplicador: {error}")
-    st.info("O cadastro e o login continuam preservados. O núcleo do multiplicador precisa estar disponível no arquivo local ou no repositório.")
+    st.info("O cadastro e o login foram preservados. Detalhe técnico: " + str(error))
     st.stop()
