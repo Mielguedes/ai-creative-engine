@@ -10,7 +10,6 @@ from datetime import datetime, timezone
 
 import requests
 import streamlit as st
-from faster_whisper import WhisperModel
 
 from admin_panel import render_admin_panel
 from storage_sync import (
@@ -20,10 +19,22 @@ from storage_sync import (
 )
 from storage_ui import save_uploaded_files
 
+
+# Carregamento tardio: evita que o aplicativo fique em tela preta
+# caso o modelo de transcrição demore ou falhe ao importar.
+def WhisperModel(*args, **kwargs):
+    from faster_whisper import WhisperModel as _WhisperModel
+
+    return _WhisperModel(*args, **kwargs)
+
+
 st.set_page_config(page_title="AI Creative Engine", layout="wide")
 
 LEGACY_SOURCE_URL = "https://raw.githubusercontent.com/Mielguedes/ai-creative-engine/main/app_restauracao_storage_final.py"
-LEGACY_MARKERS = ("# --- ESTRUTURA DE PASTAS E PROJETOS ---", "# ESTRUTURA DE PASTAS E PROJETOS")
+LEGACY_MARKERS = (
+    "# --- ESTRUTURA DE PASTAS E PROJETOS ---",
+    "# ESTRUTURA DE PASTAS E PROJETOS",
+)
 
 
 def config():
@@ -209,10 +220,23 @@ try:
         "if resposta.status_code == 404:",
         "if resposta.status_code in (400, 404):",
     )
+
+    # Namespace explícito: garante que todas as dependências usadas pelo
+    # núcleo legado estejam disponíveis durante o exec().
+    legacy_namespace = globals()
+    legacy_namespace.update(
+        {
+            "WhisperModel": WhisperModel,
+            "project_prefix": project_prefix,
+            "restore_file_from_storage": restore_file_from_storage,
+            "sync_project_to_storage": sync_project_to_storage,
+            "save_uploaded_files": save_uploaded_files,
+        }
+    )
     exec(
         compile(legacy_functional_source, "legacy_multiplicador.py", "exec"),
-        globals(),
-        globals(),
+        legacy_namespace,
+        legacy_namespace,
     )
 except Exception as error:
     st.error(f"Não foi possível carregar o módulo do multiplicador: {error}")
