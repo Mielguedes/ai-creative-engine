@@ -17,7 +17,7 @@ from admin_panel import render_admin_panel
 st.set_page_config(page_title="AI Creative Engine", layout="wide")
 
 LEGACY_SOURCE_URL = "https://raw.githubusercontent.com/Mielguedes/ai-creative-engine/bc0c3587292d82ef156dd74af9cb51c0c07e3031/app_com_login.py"
-LEGACY_MARKER = "# --- ESTRUTURA DE PASTAS E PROJETOS ---"
+LEGACY_MARKERS = ("# --- ESTRUTURA DE PASTAS E PROJETOS ---", "# ESTRUTURA DE PASTAS E PROJETOS")
 
 
 def config():
@@ -112,7 +112,6 @@ if not access_is_valid(record):
     st.stop()
 
 is_admin = record.get("plan") == "admin"
-# Variáveis esperadas pelo núcleo restaurado.
 SUPABASE_URL, SUPABASE_KEY = config()
 USER_ID = user_id
 USER_EMAIL = user_email
@@ -144,7 +143,11 @@ def carregar_multiplicador():
                 response = requests.get(fonte, timeout=30)
                 response.raise_for_status()
                 source = response.text
-            marker_position = source.find(LEGACY_MARKER)
+            marker_position = -1
+            for marker in LEGACY_MARKERS:
+                marker_position = source.find(marker)
+                if marker_position >= 0:
+                    break
             if marker_position < 0:
                 raise RuntimeError("marcador do núcleo do multiplicador não encontrado")
             return source[marker_position:]
