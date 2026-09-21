@@ -65,25 +65,17 @@ def _validar_validade(valor: str) -> str | None:
     return data.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def cadastrar_acesso(
-    access_token: str,
-    email: str,
-    enabled: bool,
-    plan: str,
-    expires_at: str | None,
-) -> None:
+def cadastrar_acesso(access_token: str, email: str, enabled: bool, plan: str) -> None:
+    """Resolve o user_id no auth.users e cadastra/atualiza o acesso via RPC."""
     url, _ = _config()
-    payload = {
-        "email": email.strip().lower(),
-        "enabled": enabled,
-        "plan": plan,
-        "expires_at": _validar_validade(expires_at or ""),
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-    }
     response = requests.post(
-        f"{url}/rest/v1/app_access",
+        f"{url}/rest/v1/rpc/admin_upsert_access_by_email",
         headers={**_headers(access_token), "Prefer": "return=minimal"},
-        json=payload,
+        json={
+            "p_email": email.strip().lower(),
+            "p_enabled": enabled,
+            "p_plan": plan,
+        },
         timeout=20,
     )
     response.raise_for_status()
@@ -120,13 +112,12 @@ def render_admin_panel(access_token: str, is_admin: bool) -> None:
         return
 
     with st.expander("🛡️ Administração de membros", expanded=False):
-        st.caption("Informe somente o e-mail para liberar o acesso. A conta da pessoa precisa existir no Supabase Auth para ela conseguir fazer login.")
+        st.caption("Digite somente o e-mail. O sistema encontra o usuário no Supabase Auth e calcula a validade automaticamente conforme o plano.")
 
         st.markdown("### ➕ Cadastrar novo membro")
         with st.form("new_access_form", clear_on_submit=True):
             new_email = st.text_input("E-mail da pessoa", placeholder="pessoa@email.com")
             new_plan = st.selectbox("Plano", PLANOS, index=1)
-            new_expires = st.text_input("Validade (opcional)", placeholder="2026-12-31T23:59:59Z")
             new_enabled = st.checkbox("Acesso ativo", value=True)
             register = st.form_submit_button("Cadastrar acesso", type="primary", use_container_width=True)
 
@@ -136,18 +127,12 @@ def render_admin_panel(access_token: str, is_admin: bool) -> None:
                 st.error("Informe um e-mail válido.")
             else:
                 try:
-                    cadastrar_acesso(
-                        access_token,
-                        normalized_email,
-                        new_enabled,
-                        new_plan,
-                        _validar_validade(new_expires),
-                    )
-                    st.success("Acesso cadastrado. A pessoa já pode entrar se sua conta Auth existir.")
+                    cadastrar_acesso(access_token, normalized_email, new_enabled, new_plan)
+                    st.success("Acesso cadastrado/atualizado com sucesso.")
                     st.rerun()
                 except requests.HTTPError as exc:
                     detail = exc.response.text if exc.response is not None else str(exc)
-                    st.error(f"Não foi possível cadastrar o e-mail. Verifique se a coluna email existe, se o user_id aceita vazio e se a policy INSERT está ativa. Detalhes: {detail}")
+                    st.error(f"Não foi possível cadastrar. {detail}")
                 except Exception as exc:
                     st.error(f"Não foi possível cadastrar: {exc}")
 
