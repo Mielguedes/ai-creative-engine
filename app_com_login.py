@@ -1,10 +1,24 @@
+import itertools
+import json
 import os
+import random
+import re
+import shutil
+import subprocess
+import zipfile
 from datetime import datetime, timezone
 
 import requests
 import streamlit as st
+from faster_whisper import WhisperModel
 
 from admin_panel import render_admin_panel
+from storage_sync import (
+    project_prefix,
+    restore_file_from_storage,
+    sync_project_to_storage,
+)
+from storage_ui import save_uploaded_files
 
 st.set_page_config(page_title="AI Creative Engine", layout="wide")
 
@@ -191,8 +205,6 @@ def carregar_multiplicador():
 
 try:
     legacy_functional_source = carregar_multiplicador()
-    # O manifesto pode ainda não existir para projetos antigos. Nesse caso,
-    # o multiplicador deve continuar carregando normalmente, sem alerta.
     legacy_functional_source = legacy_functional_source.replace(
         "if resposta.status_code == 404:",
         "if resposta.status_code in (400, 404):",
