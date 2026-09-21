@@ -42,7 +42,6 @@ def listar_acessos(access_token: str) -> list[dict[str, Any]]:
 
 
 def _normalizar_validade(valor: Any) -> str:
-    """Evita exibir dados inválidos (como e-mail) no campo de data."""
     texto = str(valor or "").strip()
     if not texto:
         return ""
@@ -66,9 +65,34 @@ def _validar_validade(valor: str) -> str | None:
     return data.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def cadastrar_acesso(
+    access_token: str,
+    email: str,
+    enabled: bool,
+    plan: str,
+    expires_at: str | None,
+) -> None:
+    url, _ = _config()
+    payload = {
+        "email": email.strip().lower(),
+        "enabled": enabled,
+        "plan": plan,
+        "expires_at": _validar_validade(expires_at or ""),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    response = requests.post(
+        f"{url}/rest/v1/app_access",
+        headers={**_headers(access_token), "Prefer": "return=minimal"},
+        json=payload,
+        timeout=20,
+    )
+    response.raise_for_status()
+
+
 def atualizar_acesso(
     access_token: str,
     user_id: str,
+    email: str,
     enabled: bool,
     plan: str,
     expires_at: str | None,
@@ -80,10 +104,11 @@ def atualizar_acesso(
         "expires_at": _validar_validade(expires_at or ""),
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
+    filtro = {"user_id": f"eq.{user_id}"} if user_id else {"email": f"eq.{email.strip().lower()}"}
     response = requests.patch(
         f"{url}/rest/v1/app_access",
         headers={**_headers(access_token), "Prefer": "return=minimal"},
-        params={"user_id": f"eq.{user_id}"},
+        params=filtro,
         json=payload,
         timeout=20,
     )
@@ -95,7 +120,39 @@ def render_admin_panel(access_token: str, is_admin: bool) -> None:
         return
 
     with st.expander("🛡️ Administração de membros", expanded=False):
-        st.caption("Gerencie acessos existentes. Para remover a validade, deixe o campo vazio.")
+        st.caption("Informe somente o e-mail para liberar o acesso. A conta da pessoa precisa existir no Supabase Auth para ela conseguir fazer login.")
+
+        st.markdown("### ➕ Cadastrar novo membro")
+        with st.form("new_access_form", clear_on_submit=True):
+            new_email = st.text_input("E-mail da pessoa", placeholder="pessoa@email.com")
+            new_plan = st.selectbox("Plano", PLANOS, index=1)
+            new_expires = st.text_input("Validade (opcional)", placeholder="2026-12-31T23:59:59Z")
+            new_enabled = st.checkbox("Acesso ativo", value=True)
+            register = st.form_submit_button("Cadastrar acesso", type="primary", use_container_width=True)
+
+        if register:
+            normalized_email = new_email.strip().lower()
+            if not normalized_email or "@" not in normalized_email:
+                st.error("Informe um e-mail válido.")
+            else:
+                try:
+                    cadastrar_acesso(
+                        access_token,
+                        normalized_email,
+                        new_enabled,
+                        new_plan,
+                        _validar_validade(new_expires),
+                    )
+                    st.success("Acesso cadastrado. A pessoa já pode entrar se sua conta Auth existir.")
+                    st.rerun()
+                except requests.HTTPError as exc:
+                    detail = exc.response.text if exc.response is not None else str(exc)
+                    st.error(f"Não foi possível cadastrar o e-mail. Verifique se a coluna email existe, se o user_id aceita vazio e se a policy INSERT está ativa. Detalhes: {detail}")
+                except Exception as exc:
+                    st.error(f"Não foi possível cadastrar: {exc}")
+
+        st.divider()
+        st.markdown("### 👥 Acessos existentes")
         try:
             rows = listar_acessos(access_token)
         except Exception as exc:
@@ -107,42 +164,39 @@ def render_admin_panel(access_token: str, is_admin: bool) -> None:
             return
 
         for row in rows:
-            user_id = str(row.get("user_id", "")).strip()
-            if not user_id:
+            user_id = str(row.get("user_id") or "").strip()
+            email = str(row.get("email") or row.get("user_email") or "").strip()
+            identifier = user_id or email
+            if not identifier:
                 continue
 
-            email = str(row.get("email") or row.get("user_email") or "").strip()
             validade_atual = _normalizar_validade(row.get("expires_at"))
-
             with st.container(border=True):
-                st.write(f"**Usuário:** `{user_id}`")
-                if email:
-                    st.caption(f"E-mail: {email}")
-                if row.get("expires_at") and not validade_atual:
-                    st.warning("A validade cadastrada está inválida e foi deixada em branco. Informe uma data ISO ou deixe vazio.")
-
+                st.write(f"**E-mail:** `{email or 'não informado'}`")
+                if user_id:
+                    st.caption(f"Usuário: `{user_id}`")
                 enabled = st.checkbox(
                     "Acesso ativo",
                     value=bool(row.get("enabled", False)),
-                    key=f"access_enabled_{user_id}",
+                    key=f"access_enabled_{identifier}",
                 )
                 plan_atual = str(row.get("plan", "mensal"))
                 plan = st.selectbox(
                     "Plano",
                     PLANOS,
                     index=PLANOS.index(plan_atual) if plan_atual in PLANOS else 1,
-                    key=f"access_plan_{user_id}",
+                    key=f"access_plan_{identifier}",
                 )
                 expires_at = st.text_input(
                     "Validade (ISO ou vazio)",
                     value=validade_atual,
                     placeholder="2026-12-31T23:59:59Z",
-                    key=f"access_expires_{user_id}",
+                    key=f"access_expires_{identifier}",
                 )
 
-                if st.button("Salvar acesso", key=f"save_access_{user_id}"):
+                if st.button("Salvar acesso", key=f"save_access_{identifier}"):
                     try:
-                        atualizar_acesso(access_token, user_id, enabled, plan, expires_at)
+                        atualizar_acesso(access_token, user_id, email, enabled, plan, expires_at)
                         st.success("Acesso atualizado.")
                         st.rerun()
                     except Exception as exc:
