@@ -51,12 +51,16 @@ def _secret(name: str) -> str:
 
 def _config() -> tuple[str, str, str]:
     url = _CONFIG.get("url") or _secret("SUPABASE_URL")
-    key = _CONFIG.get("key") or _secret("SUPABASE_KEY")
+    key = (
+        _CONFIG.get("key")
+        or _secret("SUPABASE_KEY")
+        or _secret("SUPABASE_ANON_KEY")
+    )
     bucket = _CONFIG.get("bucket") or _secret("SUPABASE_STORAGE_BUCKET") or "ai-creative-engine"
 
     if not url or not key or not bucket:
         raise StorageError(
-            "Configure SUPABASE_URL, SUPABASE_KEY and SUPABASE_STORAGE_BUCKET."
+            "Configure SUPABASE_URL, SUPABASE_KEY ou SUPABASE_ANON_KEY e SUPABASE_STORAGE_BUCKET."
         )
 
     return _normalize_url(url), key, bucket.strip()
