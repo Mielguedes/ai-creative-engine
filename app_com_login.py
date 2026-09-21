@@ -13,15 +13,21 @@ import streamlit as st
 from faster_whisper import WhisperModel
 
 from admin_panel import render_admin_panel
+from storage_ui import save_uploaded_files
+from storage_sync import (
+    project_prefix,
+    restore_file_from_storage,
+    sync_project_to_storage,
+)
 
 st.set_page_config(page_title="AI Creative Engine", layout="wide")
 
-LEGACY_SOURCE_URL = "https://raw.githubusercontent.com/Mielguedes/ai-creative-engine/bc0c3587292d82ef156dd74af9cb51c0c07e3031/app_com_login.py"
+LEGACY_SOURCE_URL = "https://raw.githubusercontent.com/Mielguedes/ai-creative-engine/main/app_restauracao_storage_final.py"
 LEGACY_MARKERS = ("# --- ESTRUTURA DE PASTAS E PROJETOS ---", "# ESTRUTURA DE PASTAS E PROJETOS")
 
 
 def config():
-    return (st.secrets.get("SUPABASE_URL", "").rstrip("/"), st.secrets.get("SUPABASE_ANON_KEY", ""))
+    return (st.secrets.get("SUPABASE_URL", "").rstrip("/"), st.secrets.get("SUPABASE_ANON_KEY", st.secrets.get("SUPABASE_KEY", "")))
 
 
 def auth_headers(token=None):
