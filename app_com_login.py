@@ -1,24 +1,10 @@
-import itertools
-import json
 import os
-import random
-import re
-import shutil
-import subprocess
-import zipfile
 from datetime import datetime, timezone
 
 import requests
 import streamlit as st
-from faster_whisper import WhisperModel
 
 from admin_panel import render_admin_panel
-from storage_ui import save_uploaded_files
-from storage_sync import (
-    project_prefix,
-    restore_file_from_storage,
-    sync_project_to_storage,
-)
 
 st.set_page_config(page_title="AI Creative Engine", layout="wide")
 
@@ -27,12 +13,19 @@ LEGACY_MARKERS = ("# --- ESTRUTURA DE PASTAS E PROJETOS ---", "# ESTRUTURA DE PA
 
 
 def config():
-    return (st.secrets.get("SUPABASE_URL", "").rstrip("/"), st.secrets.get("SUPABASE_ANON_KEY", st.secrets.get("SUPABASE_KEY", "")))
+    return (
+        st.secrets.get("SUPABASE_URL", "").rstrip("/"),
+        st.secrets.get("SUPABASE_ANON_KEY", st.secrets.get("SUPABASE_KEY", "")),
+    )
 
 
 def auth_headers(token=None):
     url, anon_key = config()
-    return url, {"apikey": anon_key, "Authorization": f"Bearer {token}" if token else f"Bearer {anon_key}", "Content-Type": "application/json"}
+    return url, {
+        "apikey": anon_key,
+        "Authorization": f"Bearer {token}" if token else f"Bearer {anon_key}",
+        "Content-Type": "application/json",
+    }
 
 
 def login_supabase(email, password):
@@ -40,7 +33,12 @@ def login_supabase(email, password):
     if not url or not headers["apikey"]:
         return None, "Configure SUPABASE_URL e SUPABASE_ANON_KEY nos Secrets."
     try:
-        response = requests.post(f"{url}/auth/v1/token?grant_type=password", headers=headers, json={"email": email, "password": password}, timeout=20)
+        response = requests.post(
+            f"{url}/auth/v1/token?grant_type=password",
+            headers=headers,
+            json={"email": email, "password": password},
+            timeout=20,
+        )
         if response.ok:
             return response.json(), None
         return None, "E-mail ou senha inválidos."
@@ -51,7 +49,12 @@ def login_supabase(email, password):
 def _query_access(token, params):
     url, headers = auth_headers(token)
     try:
-        response = requests.get(f"{url}/rest/v1/app_access", headers={**headers, "Accept": "application/json"}, params=params, timeout=20)
+        response = requests.get(
+            f"{url}/rest/v1/app_access",
+            headers={**headers, "Accept": "application/json"},
+            params=params,
+            timeout=20,
+        )
         if response.ok:
             records = response.json()
             return records[0] if records else None
@@ -61,8 +64,15 @@ def _query_access(token, params):
 
 
 def access_record(token, user_id, email):
-    record = _query_access(token, {"select": "user_id,email,enabled,plan,expires_at", "user_id": f"eq.{user_id}", "limit": "1"})
-    return record or _query_access(token, {"select": "user_id,email,enabled,plan,expires_at", "email": f"eq.{email}", "limit": "1"})
+    fields = "user_id,email,enabled,plan,expires_at"
+    record = _query_access(
+        token,
+        {"select": fields, "user_id": f"eq.{user_id}", "limit": "1"},
+    )
+    return record or _query_access(
+        token,
+        {"select": fields, "email": f"eq.{email}", "limit": "1"},
+    )
 
 
 def access_is_valid(record):
@@ -86,7 +96,9 @@ def show_login():
     with st.form("supabase_login"):
         email = st.text_input("📧 E-mail")
         password = st.text_input("🔑 Senha", type="password")
-        submitted = st.form_submit_button("🚀 ENTRAR", type="primary", use_container_width=True)
+        submitted = st.form_submit_button(
+            "🚀 ENTRAR", type="primary", use_container_width=True
+        )
     if submitted:
         session, error = login_supabase(email.strip(), password)
         if error:
@@ -99,7 +111,16 @@ def show_login():
         if not access_is_valid(record):
             st.error("Sua conta não possui acesso ativo ou está vencida.")
             return False
-        st.session_state.update(autenticado=True, auth_ok=True, access_token=session.get("access_token", ""), refresh_token=session.get("refresh_token", ""), user_id=user_id, user_email=user_email, user_plano=record.get("plan", "monthly"), user_ativo=record.get("enabled", False))
+        st.session_state.update(
+            autenticado=True,
+            auth_ok=True,
+            access_token=session.get("access_token", ""),
+            refresh_token=session.get("refresh_token", ""),
+            user_id=user_id,
+            user_email=user_email,
+            user_plano=record.get("plan", "monthly"),
+            user_ativo=record.get("enabled", False),
+        )
         st.rerun()
     return False
 
@@ -136,7 +157,13 @@ render_admin_panel(access_token, is_admin)
 
 def carregar_multiplicador():
     fontes = [
-        ("arquivo local restaurado", os.path.join(os.path.dirname(os.path.abspath(__file__)), "app_restauracao_storage_final.py")),
+        (
+            "arquivo local restaurado",
+            os.path.join(
+                os.path.dirname(os.path.abspath(__file__)),
+                "app_restauracao_storage_final.py",
+            ),
+        ),
         ("arquivo legado remoto", LEGACY_SOURCE_URL),
     ]
     ultimo_erro = None
@@ -164,7 +191,17 @@ def carregar_multiplicador():
 
 try:
     legacy_functional_source = carregar_multiplicador()
-    exec(compile(legacy_functional_source, "legacy_multiplicador.py", "exec"), globals(), globals())
+    # O manifesto pode ainda não existir para projetos antigos. Nesse caso,
+    # o multiplicador deve continuar carregando normalmente, sem alerta.
+    legacy_functional_source = legacy_functional_source.replace(
+        "if resposta.status_code == 404:",
+        "if resposta.status_code in (400, 404):",
+    )
+    exec(
+        compile(legacy_functional_source, "legacy_multiplicador.py", "exec"),
+        globals(),
+        globals(),
+    )
 except Exception as error:
     st.error(f"Não foi possível carregar o módulo do multiplicador: {error}")
     st.info("O cadastro e o login foram preservados. Detalhe técnico: " + str(error))
