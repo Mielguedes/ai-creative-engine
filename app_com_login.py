@@ -124,4 +124,4 @@ os.makedirs(BASE_DIR, exist_ok=True)
 def listar_projetos():
     return sorted([d for d in os.listdir(BASE_DIR) if os.path.isdir(os.path.join(BASE_DIR, d))])
 
-# O restante do aplicativo deve ser restaurado do histórico do Git antes de continuar.
+# O restante do aplicativo original será restaurado a partir do histórico Git.
