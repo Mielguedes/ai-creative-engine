@@ -30,9 +30,11 @@ def normalizar_plano(valor: Any) -> str:
 
 def _config() -> tuple[str, str]:
     url = str(st.secrets.get("SUPABASE_URL", "")).rstrip("/")
-    anon_key = str(st.secrets.get("SUPABASE_ANON_KEY", ""))
+    anon_key = str(
+        st.secrets.get("SUPABASE_ANON_KEY", st.secrets.get("SUPABASE_KEY", ""))
+    )
     if not url or not anon_key:
-        raise RuntimeError("Configure SUPABASE_URL e SUPABASE_ANON_KEY nos Secrets.")
+        raise RuntimeError("Configure SUPABASE_URL e SUPABASE_ANON_KEY ou SUPABASE_KEY nos Secrets.")
     return url, anon_key
 
 
@@ -46,7 +48,7 @@ def _headers(access_token: str) -> dict[str, str]:
 
 
 def cadastrar_acesso(access_token: str, email: str, plan: str) -> None:
-    """Cadastra um usuário que já existe no Supabase Auth pelo e-mail."""
+    """Cadastra uma conta que já existe no Supabase Auth pelo e-mail."""
     url, _ = _config()
     response = requests.post(
         f"{url}/rest/v1/rpc/admin_upsert_access_by_email",
@@ -98,7 +100,14 @@ def _validar_validade(valor: str) -> str | None:
     return data.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def atualizar_acesso(access_token: str, user_id: str, email: str, enabled: bool, plan: str, expires_at: str | None) -> None:
+def atualizar_acesso(
+    access_token: str,
+    user_id: str,
+    email: str,
+    enabled: bool,
+    plan: str,
+    expires_at: str | None,
+) -> None:
     url, _ = _config()
     payload = {
         "enabled": enabled,
@@ -140,7 +149,7 @@ def render_admin_panel(access_token: str, is_admin: bool) -> None:
                     st.rerun()
                 except requests.HTTPError as exc:
                     detail = exc.response.text if exc.response is not None else str(exc)
-                    st.error(f"Não foi possível cadastrar. Verifique se o e-mail já possui conta no Auth.\n\n{detail}")
+                    st.error(f"Não foi possível cadastrar. Confirme se a função SQL admin_upsert_access_by_email foi criada no Supabase e se o e-mail já possui conta no Auth.\n\n{detail}")
                 except Exception as exc:
                     st.error(f"Não foi possível cadastrar: {exc}")
 
