@@ -69,7 +69,7 @@ def cadastrar_acesso(access_token: str, email: str, enabled: bool, plan: str) ->
     """Resolve o user_id no auth.users e cadastra/atualiza o acesso via RPC."""
     url, _ = _config()
     response = requests.post(
-        f"{url}/rest/v1/rpc/admin_upsert_access_by_email",
+        f"{url}/rest/v1/rpc/cadastrar_acesso_por_email",
         headers={**_headers(access_token), "Prefer": "return=minimal"},
         json={
             "p_email": email.strip().lower(),
