@@ -8,7 +8,26 @@ from typing import Any
 import requests
 import streamlit as st
 
-PLANOS = ["admin", "mensal", "trimestral", "anual"]
+# Os valores gravados no Supabase são os valores canônicos em inglês.
+# A interface continua mostrando os nomes em português.
+PLANOS = ["monthly", "quarterly", "annual", "admin"]
+PLANOS_LABELS = {
+    "monthly": "Mensal",
+    "quarterly": "Trimestral",
+    "annual": "Anual",
+    "admin": "Administrador",
+}
+PLANOS_LEGADOS = {
+    "mensal": "monthly",
+    "trimestral": "quarterly",
+    "anual": "annual",
+    "administrador": "admin",
+}
+
+
+def normalizar_plano(valor: Any) -> str:
+    plano = str(valor or "").strip().lower()
+    return PLANOS_LEGADOS.get(plano, plano if plano in PLANOS else "monthly")
 
 
 def _config() -> tuple[str, str]:
@@ -59,22 +78,27 @@ def _validar_validade(valor: str) -> str | None:
     try:
         data = datetime.fromisoformat(texto.replace("Z", "+00:00"))
     except ValueError as exc:
-        raise ValueError("Use uma data ISO válida, por exemplo: 2026-12-31T23:59:59Z") from exc
+        raise ValueError(
+            "Use uma data ISO válida, por exemplo: 2026-12-31T23:59:59Z"
+        ) from exc
     if data.tzinfo is None:
         data = data.replace(tzinfo=timezone.utc)
     return data.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def cadastrar_acesso(access_token: str, email: str, enabled: bool, plan: str) -> None:
-    """Resolve o user_id no auth.users e cadastra/atualiza o acesso via RPC."""
+def cadastrar_acesso(
+    access_token: str, email: str, enabled: bool, plan: str
+) -> None:
+    """Cadastra ou atualiza o acesso por e-mail usando a RPC protegida."""
     url, _ = _config()
+    plano_canonico = normalizar_plano(plan)
     response = requests.post(
         f"{url}/rest/v1/rpc/cadastrar_acesso_por_email",
         headers={**_headers(access_token), "Prefer": "return=minimal"},
         json={
             "p_email": email.strip().lower(),
             "p_enabled": enabled,
-            "p_plan": plan,
+            "p_plan": plano_canonico,
         },
         timeout=20,
     )
@@ -92,11 +116,15 @@ def atualizar_acesso(
     url, _ = _config()
     payload = {
         "enabled": enabled,
-        "plan": plan,
+        "plan": normalizar_plano(plan),
         "expires_at": _validar_validade(expires_at or ""),
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
-    filtro = {"user_id": f"eq.{user_id}"} if user_id else {"email": f"eq.{email.strip().lower()}"}
+    filtro = (
+        {"user_id": f"eq.{user_id}"}
+        if user_id
+        else {"email": f"eq.{email.strip().lower()}"}
+    )
     response = requests.patch(
         f"{url}/rest/v1/app_access",
         headers={**_headers(access_token), "Prefer": "return=minimal"},
@@ -112,14 +140,26 @@ def render_admin_panel(access_token: str, is_admin: bool) -> None:
         return
 
     with st.expander("🛡️ Administração de membros", expanded=False):
-        st.caption("Digite somente o e-mail. O sistema encontra o usuário no Supabase Auth e calcula a validade automaticamente conforme o plano.")
+        st.caption(
+            "Digite somente o e-mail. O sistema encontra o usuário no Supabase Auth "
+            "e calcula a validade automaticamente conforme o plano."
+        )
 
         st.markdown("### ➕ Cadastrar novo membro")
         with st.form("new_access_form", clear_on_submit=True):
-            new_email = st.text_input("E-mail da pessoa", placeholder="pessoa@email.com")
-            new_plan = st.selectbox("Plano", PLANOS, index=1)
+            new_email = st.text_input(
+                "E-mail da pessoa", placeholder="pessoa@email.com"
+            )
+            new_plan = st.selectbox(
+                "Plano",
+                PLANOS,
+                index=0,
+                format_func=lambda value: PLANOS_LABELS[value],
+            )
             new_enabled = st.checkbox("Acesso ativo", value=True)
-            register = st.form_submit_button("Cadastrar acesso", type="primary", use_container_width=True)
+            register = st.form_submit_button(
+                "Cadastrar acesso", type="primary", use_container_width=True
+            )
 
         if register:
             normalized_email = new_email.strip().lower()
@@ -127,7 +167,9 @@ def render_admin_panel(access_token: str, is_admin: bool) -> None:
                 st.error("Informe um e-mail válido.")
             else:
                 try:
-                    cadastrar_acesso(access_token, normalized_email, new_enabled, new_plan)
+                    cadastrar_acesso(
+                        access_token, normalized_email, new_enabled, new_plan
+                    )
                     st.success("Acesso cadastrado/atualizado com sucesso.")
                     st.rerun()
                 except requests.HTTPError as exc:
@@ -165,11 +207,12 @@ def render_admin_panel(access_token: str, is_admin: bool) -> None:
                     value=bool(row.get("enabled", False)),
                     key=f"access_enabled_{identifier}",
                 )
-                plan_atual = str(row.get("plan", "mensal"))
+                plano_atual = normalizar_plano(row.get("plan"))
                 plan = st.selectbox(
                     "Plano",
                     PLANOS,
-                    index=PLANOS.index(plan_atual) if plan_atual in PLANOS else 1,
+                    index=PLANOS.index(plano_atual),
+                    format_func=lambda value: PLANOS_LABELS[value],
                     key=f"access_plan_{identifier}",
                 )
                 expires_at = st.text_input(
@@ -181,7 +224,14 @@ def render_admin_panel(access_token: str, is_admin: bool) -> None:
 
                 if st.button("Salvar acesso", key=f"save_access_{identifier}"):
                     try:
-                        atualizar_acesso(access_token, user_id, email, enabled, plan, expires_at)
+                        atualizar_acesso(
+                            access_token,
+                            user_id,
+                            email,
+                            enabled,
+                            plan,
+                            expires_at,
+                        )
                         st.success("Acesso atualizado.")
                         st.rerun()
                     except Exception as exc:
