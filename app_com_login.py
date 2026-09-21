@@ -17,6 +17,7 @@ from admin_panel import render_admin_panel
 st.set_page_config(page_title="AI Creative Engine", layout="wide")
 
 LEGACY_SOURCE_URL = "https://raw.githubusercontent.com/Mielguedes/ai-creative-engine/bc0c3587292d82ef156dd74af9cb51c0c07e3031/app_com_login.py"
+LEGACY_MARKER = "# --- ESTRUTURA DE PASTAS E PROJETOS ---"
 
 
 def config():
@@ -113,9 +114,7 @@ def show_login():
     with st.form("supabase_login"):
         email = st.text_input("📧 E-mail")
         password = st.text_input("🔑 Senha", type="password")
-        submitted = st.form_submit_button(
-            "🚀 ENTRAR", type="primary", use_container_width=True
-        )
+        submitted = st.form_submit_button("🚀 ENTRAR", type="primary", use_container_width=True)
     if submitted:
         session, error = login_supabase(email.strip(), password)
         if error:
@@ -135,7 +134,7 @@ def show_login():
             refresh_token=session.get("refresh_token", ""),
             user_id=user_id,
             user_email=user_email,
-            user_plano=record.get("plan", "mensal"),
+            user_plano=record.get("plan", "monthly"),
             user_ativo=record.get("enabled", False),
         )
         st.rerun()
@@ -157,29 +156,46 @@ if not access_is_valid(record):
 
 is_admin = record.get("plan") == "admin"
 st.sidebar.success(f"Conectado: {user_email}")
-st.sidebar.caption(f"Plano: {record.get('plan', 'mensal')}")
+st.sidebar.caption(f"Plano: {record.get('plan', 'monthly')}")
 if st.sidebar.button("🚪 Sair", use_container_width=True):
     st.session_state.clear()
     st.rerun()
 
 render_admin_panel(access_token, is_admin)
 
-# Executa somente a parte funcional do multiplicador legado.
-# O login antigo e o logout legado ficam excluídos para evitar conflito.
+
+def carregar_multiplicador():
+    """Carrega o núcleo do multiplicador sem depender exclusivamente da internet."""
+    fontes = []
+    local_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "multiplicador_core.py")
+    if os.path.isfile(local_path):
+        fontes.append(("arquivo local", local_path))
+    fontes.append(("arquivo legado", LEGACY_SOURCE_URL))
+
+    ultimo_erro = None
+    for origem, fonte in fontes:
+        try:
+            if origem == "arquivo local":
+                source = open(fonte, "r", encoding="utf-8").read()
+            else:
+                response = requests.get(fonte, timeout=30)
+                response.raise_for_status()
+                source = response.text
+
+            marker_position = source.find(LEGACY_MARKER)
+            if marker_position < 0:
+                raise RuntimeError("marcador do núcleo do multiplicador não encontrado")
+            return source[marker_position:]
+        except Exception as error:
+            ultimo_erro = error
+
+    raise RuntimeError(str(ultimo_erro or "fonte indisponível"))
+
+
 try:
-    legacy_response = requests.get(LEGACY_SOURCE_URL, timeout=30)
-    legacy_response.raise_for_status()
-    legacy_source = legacy_response.text
-    marker = "# --- ESTRUTURA DE PASTAS E PROJETOS ---"
-    marker_position = legacy_source.find(marker)
-    if marker_position < 0:
-        st.error("Não foi possível localizar a parte funcional do multiplicador legado.")
-        st.stop()
-    legacy_functional_source = legacy_source[marker_position:]
+    legacy_functional_source = carregar_multiplicador()
     exec(compile(legacy_functional_source, "legacy_multiplicador.py", "exec"), globals(), globals())
-except requests.RequestException:
-    st.error("Não foi possível carregar o módulo do multiplicador. Tente novamente.")
-    st.stop()
 except Exception as error:
-    st.error(f"Erro ao carregar o multiplicador: {error}")
+    st.error(f"Não foi possível carregar o módulo do multiplicador: {error}")
+    st.info("O cadastro e o login continuam preservados. O núcleo do multiplicador precisa estar disponível no arquivo local ou no repositório.")
     st.stop()
